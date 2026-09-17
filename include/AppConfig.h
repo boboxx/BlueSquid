@@ -13,15 +13,15 @@ namespace AppConfig {
 constexpr char kProductName[] = "BlueSquid Camper Control";
 // Independent device releases. The build selects the version for this target.
 #if defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
-constexpr char kFirmwareVersion[] = "1.0.22";
+constexpr char kFirmwareVersion[] = "1.0.23";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 22;
+constexpr uint8_t kFirmwareVersionPatch = 23;
 #else
-constexpr char kFirmwareVersion[] = "1.0.15";
+constexpr char kFirmwareVersion[] = "1.0.16";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 15;
+constexpr uint8_t kFirmwareVersionPatch = 16;
 #endif
 constexpr char kBleDeviceName[] = "BlueSquid";
 
@@ -54,18 +54,7 @@ constexpr float kCapacityAh = BLUESQUID_BATTERY_CAPACITY_AH;
 }  // namespace Battery
 
 namespace I2c {
-#ifndef BLUESQUID_I2C_SDA_PIN
-#define BLUESQUID_I2C_SDA_PIN 21
-#endif
-#ifndef BLUESQUID_I2C_SCL_PIN
-#define BLUESQUID_I2C_SCL_PIN 22
-#endif
-constexpr int kSdaPin = BLUESQUID_I2C_SDA_PIN;
-constexpr int kSclPin = BLUESQUID_I2C_SCL_PIN;
-constexpr uint32_t kFrequencyHz = 400000;
-constexpr uint8_t kPca9685Address = 0x40;
-
-// HTU21D uses 0x40, which conflicts with the PCA9685, so it uses I2C bus 1.
+// HTU21D climate sensor remains on its dedicated I2C bus.
 #ifndef BLUESQUID_CLIMATE_I2C_SDA_PIN
 #define BLUESQUID_CLIMATE_I2C_SDA_PIN 18
 #endif
@@ -108,11 +97,6 @@ constexpr float kAttitudeFilterAlpha = 0.30F;
 constexpr bool kInvertPitch = false;
 constexpr bool kInvertRoll = false;
 }  // namespace Sensors
-
-namespace Pwm {
-constexpr float kFrequencyHz = 1000.0F;
-constexpr uint8_t kOutput4Channel = 3;
-}  // namespace Pwm
 
 namespace Outputs {
 // TODO: Assign protected GPIOs after the relay/MOSFET driver design is final.
@@ -181,22 +165,6 @@ constexpr int kAllLightsSwitchPin = BLUESQUID_ALL_LIGHTS_SWITCH_PIN;
 constexpr bool kAllLightsSwitchActiveLow = true;
 constexpr uint32_t kAllLightsSwitchDebounceMs = 50;
 }  // namespace Outputs
-
-namespace Rs485 {
-#ifndef BLUESQUID_RS485_RX_PIN
-#define BLUESQUID_RS485_RX_PIN 1
-#endif
-#ifndef BLUESQUID_RS485_TX_PIN
-#define BLUESQUID_RS485_TX_PIN 2
-#endif
-#ifndef BLUESQUID_RS485_DIRECTION_PIN
-#define BLUESQUID_RS485_DIRECTION_PIN -1
-#endif
-constexpr int kRxPin = BLUESQUID_RS485_RX_PIN;
-constexpr int kTxPin = BLUESQUID_RS485_TX_PIN;
-constexpr int kDirectionPin = BLUESQUID_RS485_DIRECTION_PIN;
-constexpr uint32_t kBaud = 115200;
-}  // namespace Rs485
 
 namespace Can {
 #ifndef BLUESQUID_CAN_TX_PIN

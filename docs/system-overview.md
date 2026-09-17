@@ -1,3 +1,5 @@
+Historical design reference: this document includes superseded CAN, RS-485 or PCA9685 designs. For the current implemented connections, see docs/wiring.md and docs/rvc-fa75.md.
+
 # BlueSquid System Design and Feasibility Review
 
 Revision: 2026-08-16

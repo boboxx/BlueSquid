@@ -733,12 +733,12 @@ void BleManager::processTouchCommand() {
     if (!available) break;
 
     BlueSquidBle::AckResult result = BlueSquidBle::AckResult::Accepted;
-    const auto command = static_cast<BlueSquidCan::Command>(queued.command);
+    const auto command = static_cast<BlueSquidControl::Command>(queued.command);
     const uint16_t value = queued.length >= 2
                                ? BlueSquidBle::readU16(queued.payload)
                                : 0;
     switch (command) {
-      case BlueSquidCan::Command::SetRgbw: {
+      case BlueSquidControl::Command::SetRgbw: {
         const uint8_t zone = queued.target >> 4;
         const uint8_t channel = queued.target & 0x0F;
         if (queued.length != 2 || zone > 3 || channel > 3 || value > 100 ||
@@ -747,7 +747,7 @@ void BleManager::processTouchCommand() {
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
       }
-      case BlueSquidCan::Command::SetRgbwPreset: {
+      case BlueSquidControl::Command::SetRgbwPreset: {
         const uint8_t zone = queued.target >> 4;
         const uint8_t field = queued.target & 0x0F;
         if (queued.length != 2 || zone > 3 || field > 4 || value > 100 ||
@@ -756,82 +756,82 @@ void BleManager::processTouchCommand() {
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
       }
-      case BlueSquidCan::Command::SetRgbwState:
+      case BlueSquidControl::Command::SetRgbwState:
         if (queued.length != 9 || queued.target > 3 ||
             !outputController_.setRgbwState(
                 static_cast<RgbwZone>(queued.target), queued.payload,
                 queued.payload + 4, queued.payload[7], queued.payload[8]))
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::SetFanReverse:
+      case BlueSquidControl::Command::SetFanReverse:
         if (queued.length != 2 || value > 1 ||
             !outputController_.setFanReverse(value != 0))
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::SetFan:
+      case BlueSquidControl::Command::SetFan:
         if (queued.length != 2 || value > 100 ||
             !outputController_.setFanSpeed(value))
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::SetUsb:
+      case BlueSquidControl::Command::SetUsb:
         if (queued.length != 2 || value > 1)
           result = BlueSquidBle::AckResult::InvalidValue;
         else
           outputController_.setUsbEnabled(value != 0);
         break;
-      case BlueSquidCan::Command::SetPump:
+      case BlueSquidControl::Command::SetPump:
         if (queued.length != 2 || value > 1)
           result = BlueSquidBle::AckResult::InvalidValue;
         else
           outputController_.setWaterPumpEnabled(value != 0);
         break;
-      case BlueSquidCan::Command::SetAccessory3:
+      case BlueSquidControl::Command::SetAccessory3:
         if (queued.length != 2 || value > 1)
           result = BlueSquidBle::AckResult::InvalidValue;
         else
           outputController_.setAccessory3Enabled(value != 0);
         break;
-      case BlueSquidCan::Command::SetAccessory4:
+      case BlueSquidControl::Command::SetAccessory4:
         if (queued.length != 2 || value > 1)
           result = BlueSquidBle::AckResult::InvalidValue;
         else
           outputController_.setAccessory4Enabled(value != 0);
         break;
-      case BlueSquidCan::Command::SetInverter:
+      case BlueSquidControl::Command::SetInverter:
         if (queued.length != 2 || value > 1 ||
             !batteryManager_.setInverterEnabled(value != 0))
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::SetCharger:
+      case BlueSquidControl::Command::SetCharger:
         if (queued.length != 2 || value > 1 ||
             !batteryManager_.setChargerEnabled(value != 0))
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::ApplyScene:
+      case BlueSquidControl::Command::ApplyScene:
         if (queued.length != 2 ||
             value > static_cast<uint8_t>(LightingScene::Travel))
           result = BlueSquidBle::AckResult::InvalidValue;
         else
           outputController_.applyScene(static_cast<LightingScene>(value));
         break;
-      case BlueSquidCan::Command::RequestStatus:
+      case BlueSquidControl::Command::RequestStatus:
         break;
-      case BlueSquidCan::Command::SetAllLights:
+      case BlueSquidControl::Command::SetAllLights:
         if (queued.length != 2 || value > 1)
           result = BlueSquidBle::AckResult::InvalidValue;
         else
           outputController_.setAllLightsEnabled(value != 0);
         break;
-      case BlueSquidCan::Command::CalibrateLevel:
+      case BlueSquidControl::Command::CalibrateLevel:
         if (!sensorManager_.calibrateLevel())
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::SetBatteryCapacity:
+      case BlueSquidControl::Command::SetBatteryCapacity:
         if (queued.length != 2 ||
             !batteryManager_.setCapacityAh(value / 10.0F))
           result = BlueSquidBle::AckResult::InvalidValue;
         break;
-      case BlueSquidCan::Command::SetLevelCalibration: {
+      case BlueSquidControl::Command::SetLevelCalibration: {
         const float setting = static_cast<int16_t>(value) / 100.0F;
         if (queued.length != 2 || queued.target > 3 ||
             !sensorManager_.setLevelCalibration(

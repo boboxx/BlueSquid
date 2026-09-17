@@ -1,3 +1,5 @@
+Historical design reference: this document includes superseded CAN, RS-485 or PCA9685 designs. For the current implemented connections, see docs/wiring.md and docs/rvc-fa75.md.
+
 BLUESQUID REAR CONTROLLER PCB DESIGN BRIEF FOR FLUX.AI
 Revision: Draft A
 Date: 2026-08-20

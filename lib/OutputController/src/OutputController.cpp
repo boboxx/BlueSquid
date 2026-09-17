@@ -14,11 +14,9 @@ constexpr uint8_t kRgbwZoneCount = 4;
 
 }  // namespace
 
-OutputController::OutputController(PwmManager& pwmManager,
-                                   EventManager& eventManager,
+OutputController::OutputController(EventManager& eventManager,
                                    SettingsManager& settingsManager)
-    : pwmManager_(pwmManager),
-      eventManager_(eventManager),
+    : eventManager_(eventManager),
       settingsManager_(settingsManager) {}
 
 void OutputController::begin() {
@@ -222,19 +220,7 @@ void OutputController::setRvcFanStatus(bool enabled, bool online, bool on, uint8
 }
 
 bool OutputController::setFanSpeed(uint8_t percent) {
-  if (fanCommand_) return fanCommand_(percent);
-
-  const uint8_t value = constrain(percent, 0, 100);
-  if (!pwmManager_.setPercent(AppConfig::Pwm::kOutput4Channel, value)) {
-    return false;
-  }
-  status_.fanSpeed = value;
-  if (!restoring_) {
-    deviceState_.fanSpeed = value;
-    scheduleSave();
-  }
-  publishChange();
-  return true;
+  return percent <= 100 && fanCommand_ && fanCommand_(percent);
 }
 
 void OutputController::setUsbEnabled(bool enabled) {
@@ -297,7 +283,6 @@ void OutputController::restoreDeviceState() {
                      deviceState_.rgbwLevel[zone][channel]);
     }
   }
-  setFanSpeed(deviceState_.fanSpeed);
   setUsbEnabled(deviceState_.usbEnabled != 0);
   setWaterPumpEnabled(false);
   setAccessory3Enabled(false);
@@ -305,8 +290,7 @@ void OutputController::restoreDeviceState() {
   restoring_ = false;
 
   LOG_INFO(kTag,
-           "Restored lights, ambience, fan and USB; pump and accessory 3 "
-           "held off for safety");
+           "Restored lights and USB; pump and accessories 3/4 held off for safety");
 }
 
 void OutputController::sanitizeDeviceState() {
@@ -323,7 +307,7 @@ void OutputController::sanitizeDeviceState() {
         constrain(deviceState_.rgbwBrightness[zone], 0, 100);
     deviceState_.rgbwOptions[zone] &= 0x07;
   }
-  deviceState_.fanSpeed = constrain(deviceState_.fanSpeed, 0, 100);
+  deviceState_.reserved = 0;
   deviceState_.usbEnabled = deviceState_.usbEnabled ? 1 : 0;
   deviceState_.pumpRequested = deviceState_.pumpRequested ? 1 : 0;
   deviceState_.accessory3Requested = deviceState_.accessory3Requested ? 1 : 0;

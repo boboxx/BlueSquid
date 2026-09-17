@@ -11,7 +11,7 @@ struct PersistentDeviceState {
   uint8_t rgbwBrightness[4]{100, 100, 100, 100};
   // Bits 0/1/2: colour, warm white, cool white selected.
   uint8_t rgbwOptions[4]{2, 2, 2, 2};
-  uint8_t fanSpeed = 0;
+  uint8_t reserved = 0; // Keep the stored record layout stable; fan state is never restored.
   uint8_t usbEnabled = 0;
   uint8_t pumpRequested = 0;
   uint8_t accessory3Requested = 0;

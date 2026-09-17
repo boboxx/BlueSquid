@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-#include "BlueSquidCanProtocol.h"
+#include "BlueSquidControlProtocol.h"
 
 // BLE-native transport used by the dedicated touchscreen.  The legacy
 // 7D8B100x service remains available for the iOS application.
@@ -120,7 +120,7 @@ inline uint32_t readU32(const uint8_t* source) {
 }
 
 inline size_t encodeValueCommand(uint16_t sequence,
-                                 BlueSquidCan::Command command,
+                                 BlueSquidControl::Command command,
                                  uint8_t target, uint16_t value,
                                  uint8_t* output) {
   if (output == nullptr) return 0;

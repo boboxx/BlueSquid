@@ -2,13 +2,12 @@
 
 #include "EventManager.h"
 #include <functional>
-#include "PwmManager.h"
 #include "SettingsManager.h"
 #include "SystemTypes.h"
 
 class OutputController {
  public:
-  OutputController(PwmManager& pwmManager, EventManager& eventManager,
+  OutputController(EventManager& eventManager,
                    SettingsManager& settingsManager);
 
   void begin();
@@ -56,7 +55,6 @@ class OutputController {
   void scheduleSave();
   void publishChange() const;
 
-  PwmManager& pwmManager_;
   EventManager& eventManager_;
   SettingsManager& settingsManager_;
   OutputStatus status_{};

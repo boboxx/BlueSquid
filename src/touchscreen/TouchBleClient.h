@@ -7,7 +7,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
-#include "BlueSquidCanProtocol.h"
+#include "BlueSquidControlProtocol.h"
 #include "TouchRemoteStatus.h"
 
 class NimBLEAdvertisedDevice;
@@ -20,7 +20,7 @@ class TouchBleClient {
  public:
   bool begin();
   void update();
-  bool send(BlueSquidCan::Command command, uint8_t target, uint16_t value);
+  bool send(BlueSquidControl::Command command, uint8_t target, uint16_t value);
   const TouchRemoteStatus& status() const { return status_; }
   bool connected() const;
   void setDisplaySleeping(bool sleeping);
@@ -52,7 +52,7 @@ class TouchBleClient {
   void startScan();
   bool queueConfiguration(const String& command, bool config);
   void applyConnectionParameters();
-  bool sendValueCommand(BlueSquidCan::Command command, uint8_t target,
+  bool sendValueCommand(BlueSquidControl::Command command, uint8_t target,
                         uint16_t value);
   bool sendRgbwState(uint8_t zone);
 

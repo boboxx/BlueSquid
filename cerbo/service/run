@@ -1,3 +1,0 @@
-#!/bin/sh
-exec 2>&1
-exec /usr/bin/python3 /data/bluesquid-rs485/bluesquid-rs485.py /dev/ttyUSB0

@@ -20,13 +20,7 @@
 #include "LightbulbFont.h"
 #include "SystemTypes.h"
 
-#if BLUESQUID_TOUCH_BLE
 #include "TouchBleClient.h"
-#elif BLUESQUID_TOUCH_RS485_BENCH
-#include "TouchRs485Client.h"
-#else
-#include "TouchCanClient.h"
-#endif
 #include "lvgl_port.h"
 
 #if !ESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED
@@ -41,16 +35,8 @@ using namespace esp_panel::board;
 using namespace esp_panel::drivers;
 
 namespace {
-#if BLUESQUID_TOUCH_BLE
 TouchBleClient transportClient;
 constexpr char kTransportName[] = "BLE";
-#elif BLUESQUID_TOUCH_RS485_BENCH
-TouchRs485Client transportClient;
-constexpr char kTransportName[] = "RS485";
-#else
-TouchCanClient transportClient;
-constexpr char kTransportName[] = "CAN";
-#endif
 Board* panel = nullptr;
 lv_obj_t* tabView = nullptr;
 bool sdMounted = false;
@@ -692,9 +678,7 @@ void wakeDisplay() {
   if (panel->getBacklight()->on()) {
     displaySleeping = false;
     lvgl_port_set_display_sleeping(false);
-#if BLUESQUID_TOUCH_BLE
     transportClient.setDisplaySleeping(false);
-#endif
     lastUserActivityMs = millis();
     Serial.println("Display awake");
   } else {
@@ -711,9 +695,7 @@ void sleepDisplay() {
   lvgl_port_set_display_sleeping(true);
   if (panel->getBacklight()->off()) {
     displaySleeping = true;
-#if BLUESQUID_TOUCH_BLE
     transportClient.setDisplaySleeping(true);
-#endif
     Serial.println("Display asleep; touch screen to wake");
   } else {
     lvgl_port_set_display_sleeping(false);
@@ -1099,7 +1081,7 @@ bool sendZoneColor(uint8_t zone, bool enabled) {
         ? static_cast<uint8_t>((selectedRgb[zone][channel] *
                                 desiredBrightness[zone] + 50) / 100)
         : 0;
-    sent = transportClient.send(BlueSquidCan::Command::SetRgbw, target,
+    sent = transportClient.send(BlueSquidControl::Command::SetRgbw, target,
                                 level) && sent;
   }
   return sent;
@@ -1109,18 +1091,18 @@ bool sendZonePreset(uint8_t zone) {
   bool sent = true;
   for (uint8_t field = 0; field < 3; ++field) {
     const uint8_t target = static_cast<uint8_t>((zone << 4) | field);
-    sent = transportClient.send(BlueSquidCan::Command::SetRgbwPreset,
+    sent = transportClient.send(BlueSquidControl::Command::SetRgbwPreset,
                                 target, selectedRgb[zone][field]) && sent;
   }
   const uint8_t brightnessTarget =
       static_cast<uint8_t>((zone << 4) | 3);
-  sent = transportClient.send(BlueSquidCan::Command::SetRgbwPreset,
+  sent = transportClient.send(BlueSquidControl::Command::SetRgbwPreset,
                               brightnessTarget,
                               desiredBrightness[zone]) && sent;
   const uint8_t options = (desiredColorEnabled[zone] ? 1 : 0) |
                           (desiredWhiteEnabled[zone] ? desiredWhiteTone[zone] : 0);
   const uint8_t optionsTarget = static_cast<uint8_t>((zone << 4) | 4);
-  sent = transportClient.send(BlueSquidCan::Command::SetRgbwPreset,
+  sent = transportClient.send(BlueSquidControl::Command::SetRgbwPreset,
                               optionsTarget, options) && sent;
   return sent;
 }
@@ -1187,7 +1169,7 @@ bool sendZoneOutputs(uint8_t zone, bool enabled) {
   }
   bool sent = sendZoneColor(zone, enabled && desiredColorEnabled[zone]);
   const uint8_t whiteTarget = static_cast<uint8_t>((zone << 4) | 3);
-  sent = transportClient.send(BlueSquidCan::Command::SetRgbw, whiteTarget,
+  sent = transportClient.send(BlueSquidControl::Command::SetRgbw, whiteTarget,
                               enabled && desiredWhiteEnabled[zone]
                                   ? desiredBrightness[zone] : 0) && sent;
   return sent;
@@ -1430,27 +1412,27 @@ void toggleChanged(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
   lv_obj_t* object = static_cast<lv_obj_t*>(lv_event_get_target(event));
   if (lv_obj_has_state(object, LV_STATE_DISABLED)) return;
-  const auto logicalCommand = static_cast<BlueSquidCan::Command>(
+  const auto logicalCommand = static_cast<BlueSquidControl::Command>(
       reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
   const bool desired = lv_obj_has_state(object, LV_STATE_CHECKED);
   const auto command = logicalCommand;
   const bool sent = transportClient.send(command, 0, desired ? 1 : 0);
 
-  if (logicalCommand == BlueSquidCan::Command::SetInverter ||
-      logicalCommand == BlueSquidCan::Command::SetCharger) {
+  if (logicalCommand == BlueSquidControl::Command::SetInverter ||
+      logicalCommand == BlueSquidControl::Command::SetCharger) {
     Serial.printf("Power control tap: command=%u desired=%s BLE=%s\n",
                   static_cast<unsigned>(logicalCommand),
                   desired ? "on" : "off", sent ? "sent" : "failed");
   }
 
-  if (logicalCommand == BlueSquidCan::Command::SetInverter ||
-      logicalCommand == BlueSquidCan::Command::SetCharger) {
+  if (logicalCommand == BlueSquidControl::Command::SetInverter ||
+      logicalCommand == BlueSquidControl::Command::SetCharger) {
     const auto& power = transportClient.status();
-    lv_obj_t* powerStateLabel = logicalCommand == BlueSquidCan::Command::SetInverter
+    lv_obj_t* powerStateLabel = logicalCommand == BlueSquidControl::Command::SetInverter
         ? (object == homeInverterButton ? homeInverterStateLabel
                                         : inverterStateLabel)
         : chargerStateLabel;
-    const bool previous = logicalCommand == BlueSquidCan::Command::SetInverter
+    const bool previous = logicalCommand == BlueSquidControl::Command::SetInverter
         ? power.inverterValid &&
               (power.inverterMode == 2 || power.inverterMode == 3)
         : power.inverterValid &&
@@ -1458,7 +1440,7 @@ void toggleChanged(lv_event_t* event) {
     syncButton(object,
                powerStateLabel,
                sent ? desired : previous,
-               logicalCommand == BlueSquidCan::Command::SetInverter
+               logicalCommand == BlueSquidControl::Command::SetInverter
                    ? kColorGreen : kColorCyan);
     return;
   }
@@ -1466,21 +1448,21 @@ void toggleChanged(lv_event_t* event) {
   int outputIndex = -1;
   uint32_t accent = kColorCyan;
   switch (logicalCommand) {
-    case BlueSquidCan::Command::SetUsb:
+    case BlueSquidControl::Command::SetUsb:
       outputIndex = 0;
       break;
-    case BlueSquidCan::Command::SetPump:
+    case BlueSquidControl::Command::SetPump:
       outputIndex = 1;
       break;
-    case BlueSquidCan::Command::SetAccessory3:
+    case BlueSquidControl::Command::SetAccessory3:
       outputIndex = 2;
       accent = kColorAmber;
       break;
-    case BlueSquidCan::Command::SetAccessory4:
+    case BlueSquidControl::Command::SetAccessory4:
       outputIndex = 3;
       accent = kColorAmber;
       break;
-    case BlueSquidCan::Command::SetAllLights: {
+    case BlueSquidControl::Command::SetAllLights: {
       const bool previous = transportClient.status().anyLightsEnabled(savedLightGroup);
       if (sent) {
         beginPending(pendingAllLights, desired);
@@ -1516,7 +1498,7 @@ void toggleChanged(lv_event_t* event) {
 
 lv_obj_t* addToggle(lv_obj_t* parent, const char* icon, const char* name,
                     int x, int y, int width, int height,
-                    BlueSquidCan::Command command, uint32_t accent,
+                    BlueSquidControl::Command command, uint32_t accent,
                     lv_obj_t** stateLabel, lv_obj_t** titleLabel = nullptr,
                     lv_obj_t** iconLabel = nullptr) {
   lv_obj_t* button = lv_button_create(parent);
@@ -2340,7 +2322,7 @@ void calibrateLevelClicked(lv_event_t* event) {
                                 lv_color_hex(kColorRed), 0);
     return;
   }
-  if (transportClient.send(BlueSquidCan::Command::CalibrateLevel, 0, 0)) {
+  if (transportClient.send(BlueSquidControl::Command::CalibrateLevel, 0, 0)) {
     calibrationRequestedMs = millis();
     lv_label_set_text(calibrationStatusLabel,
                       "Calibrating and saving on the controller...");
@@ -2616,51 +2598,49 @@ bool sendImportedRearConfiguration(const ImportedConfiguration& imported) {
   bool sent = true;
   const uint16_t capacity = static_cast<uint16_t>(
       constrain(lroundf(imported.batteryCapacityAh * 10.0F), 100L, 20000L));
-  sent = transportClient.send(BlueSquidCan::Command::SetBatteryCapacity,
+  sent = transportClient.send(BlueSquidControl::Command::SetBatteryCapacity,
                               0, capacity) && sent;
   sent = transportClient.send(
-      BlueSquidCan::Command::SetLevelCalibration, 0,
-      static_cast<uint16_t>(BlueSquidCan::scaled(
+      BlueSquidControl::Command::SetLevelCalibration, 0,
+      static_cast<uint16_t>(BlueSquidControl::scaled(
           imported.pitchZeroDegrees, 100.0F))) && sent;
   sent = transportClient.send(
-      BlueSquidCan::Command::SetLevelCalibration, 1,
-      static_cast<uint16_t>(BlueSquidCan::scaled(
+      BlueSquidControl::Command::SetLevelCalibration, 1,
+      static_cast<uint16_t>(BlueSquidControl::scaled(
           imported.rollZeroDegrees, 100.0F))) && sent;
 
   for (uint8_t zone = 0; zone < 4; ++zone) {
     for (uint8_t channel = 0; channel < 4; ++channel) {
       sent = transportClient.send(
-          BlueSquidCan::Command::SetRgbw,
+          BlueSquidControl::Command::SetRgbw,
           static_cast<uint8_t>((zone << 4) | channel),
           imported.rgbwOutput[zone][channel]) && sent;
     }
     for (uint8_t channel = 0; channel < 3; ++channel) {
       sent = transportClient.send(
-          BlueSquidCan::Command::SetRgbwPreset,
+          BlueSquidControl::Command::SetRgbwPreset,
           static_cast<uint8_t>((zone << 4) | channel),
           imported.rgbPreset[zone][channel]) && sent;
     }
     sent = transportClient.send(
-        BlueSquidCan::Command::SetRgbwPreset,
+        BlueSquidControl::Command::SetRgbwPreset,
         static_cast<uint8_t>((zone << 4) | 3),
         imported.rgbwBrightness[zone]) && sent;
     sent = transportClient.send(
-        BlueSquidCan::Command::SetRgbwPreset,
+        BlueSquidControl::Command::SetRgbwPreset,
         static_cast<uint8_t>((zone << 4) | 4),
         imported.rgbwOptions[zone]) && sent;
   }
-#if BLUESQUID_TOUCH_BLE
   sent = transportClient.saveRvcFanConfiguration(imported.rvcFan.enabled,
       imported.rvcFan.instance, imported.rvcFan.source) && sent;
-#endif
   // Import config without changing the externally controlled fan's power state.
-  sent = transportClient.send(BlueSquidCan::Command::SetUsb, 0,
+  sent = transportClient.send(BlueSquidControl::Command::SetUsb, 0,
                               imported.accessory1Enabled ? 1 : 0) && sent;
-  sent = transportClient.send(BlueSquidCan::Command::SetAccessory4, 0,
+  sent = transportClient.send(BlueSquidControl::Command::SetAccessory4, 0,
                               imported.accessory4Enabled ? 1 : 0) && sent;
   // Never energize these safety-sensitive outputs as a side effect of import.
-  sent = transportClient.send(BlueSquidCan::Command::SetPump, 0, 0) && sent;
-  sent = transportClient.send(BlueSquidCan::Command::SetAccessory3, 0, 0) && sent;
+  sent = transportClient.send(BlueSquidControl::Command::SetPump, 0, 0) && sent;
+  sent = transportClient.send(BlueSquidControl::Command::SetAccessory3, 0, 0) && sent;
   return sent;
 }
 
@@ -2719,7 +2699,7 @@ void importConfigurationClicked(lv_event_t* event) {
     }
   }
   applyDeviceLabels();
-  transportClient.send(BlueSquidCan::Command::RequestStatus, 0, 0);
+  transportClient.send(BlueSquidControl::Command::RequestStatus, 0, 0);
   setExportStatus("Configuration imported. Pump and accessory 3 remain off.",
                   kColorGreen);
   Serial.printf("Configuration imported from %s\n", kExportPath);
@@ -2735,7 +2715,7 @@ void exportConfigurationClicked(lv_event_t* event) {
   const auto& status = transportClient.status();
   if (!status.rgbwPresetValid[0] || !status.rgbwPresetValid[1] ||
       !status.settingsValid) {
-    transportClient.send(BlueSquidCan::Command::RequestStatus, 0, 0);
+    transportClient.send(BlueSquidControl::Command::RequestStatus, 0, 0);
     setExportStatus("Waiting for complete controller configuration. Try again.",
                     kColorAmber);
     return;
@@ -2941,21 +2921,17 @@ void syncKeyboardNavigation(lv_obj_t* object, bool& visible) {
 
 void saveRvcFan(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !rvcConfigLoaded || rvcSaving) return;
-#if BLUESQUID_TOUCH_BLE
   if (transportClient.saveRvcFanConfiguration(lv_dropdown_get_selected(rvcEnabled),
       lv_dropdown_get_selected(rvcInstance) + 1, lv_dropdown_get_selected(rvcSource) + 151)) {
     rvcSaving = true; rvcSaveMs = millis();
     lv_label_set_text(rvcStatusLabel, "Saving configuration...");
   } else lv_label_set_text(rvcStatusLabel, "Controller offline — configuration not sent");
-#endif
 }
 void openRvcFan(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   rvcConfigLoaded = false; rvcSaving = false;
   lv_label_set_text(rvcStatusLabel, "Loading Controller configuration...");
-#if BLUESQUID_TOUCH_BLE
   if (!transportClient.requestRvcFanConfiguration()) lv_label_set_text(rvcStatusLabel, "Controller offline");
-#endif
   lv_obj_remove_flag(rvcOverlay, LV_OBJ_FLAG_HIDDEN); lv_obj_move_foreground(rvcOverlay);
 }
 void createRvcFanOverlay() {
@@ -3330,9 +3306,8 @@ void createSystemInfoOverlay() {
       addSystemInfoRow(card, 50, "Controller firmware", "--", true);
   char protocol[24]{};
   snprintf(protocol, sizeof(protocol), "BlueSquid v%u",
-           BlueSquidCan::kProtocolVersion);
+           BlueSquidControl::kProtocolVersion);
   addSystemInfoRow(card, 100, "Control protocol", protocol, true);
-#if BLUESQUID_TOUCH_BLE
   if (millis() - lastTransportLogMs >= 2000) {
     lastTransportLogMs = millis();
     Serial.printf("BLE diagnostic: snapshots=%lu acks=%lu online=%s\n",
@@ -3340,11 +3315,6 @@ void createSystemInfoOverlay() {
         static_cast<unsigned long>(transportClient.receivedAckCount()),
         transportClient.connected() ? "yes" : "no");
   }
-#elif BLUESQUID_TOUCH_RS485_BENCH
-  addSystemInfoRow(card, 150, "Transport", "RS-485 / 115200 baud", true);
-#else
-  addSystemInfoRow(card, 150, "Transport", "CAN / 250 kbit/s", true);
-#endif
   systemConnectionLabel =
       addSystemInfoRow(card, 200, "Controller connection", "Offline", true);
   systemUptimeLabel =
@@ -3389,7 +3359,7 @@ void requestFanSpeed(uint8_t speed) {
   if (!transportClient.connected() || !(remote.fanFlags & 2)) return;
   // FA75 has ten speeds; zero is Off.
   speed = speed ? min(100, max(10, ((speed + 5) / 10) * 10)) : 0;
-  if (transportClient.send(BlueSquidCan::Command::SetFan, 0, speed)) {
+  if (transportClient.send(BlueSquidControl::Command::SetFan, 0, speed)) {
     if (speed) lastFanSpeed = speed;
     fanRequested = speed; fanCommandMs = millis(); fanCommandWaiting = true;
     lv_label_set_text(fanStateLabel, "Applying...");
@@ -3407,7 +3377,7 @@ void fanSpeedChanged(lv_event_t* event) {
 void fanDirectionChanged(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
   const bool intake = lv_obj_has_state(fanReverseSwitch, LV_STATE_CHECKED);
-  if (transportClient.send(BlueSquidCan::Command::SetFanReverse, 0, intake ? 1 : 0)) {
+  if (transportClient.send(BlueSquidControl::Command::SetFanReverse, 0, intake ? 1 : 0)) {
     fanDirectionWaiting = true; fanRequestedIntake = intake; fanDirectionMs = millis();
   } else lv_label_set_text(fanStateLabel, "Command not sent");
 }
@@ -3520,32 +3490,32 @@ void buildUi() {
   allLightsButton = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAllRgbwLights].icon].symbol,
       deviceLabels[kLabelAllRgbwLights].value,
-      16, 225, 142, 158, BlueSquidCan::Command::SetAllLights,
+      16, 225, 142, 158, BlueSquidControl::Command::SetAllLights,
       kColorLightbulb, &allLightsStateLabel, &allLightsTitleLabel,
       &allLightsIconLabel);
   homeInverterButton = addToggle(
       home, LV_SYMBOL_POWER, "Inverter", 168, 225, 142, 158,
-      BlueSquidCan::Command::SetInverter, kColorGreen,
+      BlueSquidControl::Command::SetInverter, kColorGreen,
       &homeInverterStateLabel);
   favoriteButtons[0] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory1].icon].symbol,
       deviceLabels[kLabelAccessory1].value, 168, 225, 142, 158,
-      BlueSquidCan::Command::SetUsb, kColorCyan, &favoriteStateLabels[0],
+      BlueSquidControl::Command::SetUsb, kColorCyan, &favoriteStateLabels[0],
       &favoriteTitleLabels[0], &favoriteIconLabels[0]);
   favoriteButtons[1] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory2].icon].symbol,
       deviceLabels[kLabelAccessory2].value, 320, 225, 142, 158,
-      BlueSquidCan::Command::SetPump, kColorCyan, &favoriteStateLabels[1],
+      BlueSquidControl::Command::SetPump, kColorCyan, &favoriteStateLabels[1],
       &favoriteTitleLabels[1], &favoriteIconLabels[1]);
   favoriteButtons[2] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory3].icon].symbol,
       deviceLabels[kLabelAccessory3].value, 472, 225, 142, 158,
-      BlueSquidCan::Command::SetAccessory3, kColorAmber, &favoriteStateLabels[2],
+      BlueSquidControl::Command::SetAccessory3, kColorAmber, &favoriteStateLabels[2],
       &favoriteTitleLabels[2], &favoriteIconLabels[2]);
   favoriteButtons[3] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory4].icon].symbol,
       deviceLabels[kLabelAccessory4].value, 624, 225, 160, 158,
-      BlueSquidCan::Command::SetAccessory4, kColorAmber, &favoriteStateLabels[3],
+      BlueSquidControl::Command::SetAccessory4, kColorAmber, &favoriteStateLabels[3],
       &favoriteTitleLabels[3], &favoriteIconLabels[3]);
 
   addHeader(power, "Power", 3);
@@ -3569,29 +3539,29 @@ void buildUi() {
   createFanCard(controls);
   inverterButton = addToggle(
       controls, LV_SYMBOL_POWER, "Inverter", 16, 61, 374, 76,
-      BlueSquidCan::Command::SetInverter, kColorGreen, &inverterStateLabel);
+      BlueSquidControl::Command::SetInverter, kColorGreen, &inverterStateLabel);
   chargerButton = addToggle(
       controls, LV_SYMBOL_CHARGE, "Shore charger", 400, 61, 384, 76,
-      BlueSquidCan::Command::SetCharger, kColorCyan, &chargerStateLabel);
+      BlueSquidControl::Command::SetCharger, kColorCyan, &chargerStateLabel);
   controlButtons[0] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory1].icon].symbol,
       deviceLabels[kLabelAccessory1].value, 16, 147, 180, 200,
-      BlueSquidCan::Command::SetUsb, kColorCyan, &controlStateLabels[0],
+      BlueSquidControl::Command::SetUsb, kColorCyan, &controlStateLabels[0],
       &controlTitleLabels[0], &controlIconLabels[0]);
   controlButtons[1] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory2].icon].symbol,
       deviceLabels[kLabelAccessory2].value, 206, 147, 180, 200,
-      BlueSquidCan::Command::SetPump, kColorCyan, &controlStateLabels[1],
+      BlueSquidControl::Command::SetPump, kColorCyan, &controlStateLabels[1],
       &controlTitleLabels[1], &controlIconLabels[1]);
   controlButtons[2] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory3].icon].symbol,
       deviceLabels[kLabelAccessory3].value, 396, 147, 180, 200,
-      BlueSquidCan::Command::SetAccessory3, kColorAmber, &controlStateLabels[2],
+      BlueSquidControl::Command::SetAccessory3, kColorAmber, &controlStateLabels[2],
       &controlTitleLabels[2], &controlIconLabels[2]);
   controlButtons[3] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory4].icon].symbol,
       deviceLabels[kLabelAccessory4].value, 586, 147, 198, 200,
-      BlueSquidCan::Command::SetAccessory4, kColorAmber, &controlStateLabels[3],
+      BlueSquidControl::Command::SetAccessory4, kColorAmber, &controlStateLabels[3],
       &controlTitleLabels[3], &controlIconLabels[3]);
 
   applyDeviceDisplayLayout();
@@ -3921,7 +3891,7 @@ String remoteStatus() {
 bool remoteCommand(const String& kind,uint8_t target,uint32_t value) {
   if (!transportClient.connected() || !lvgl_port_lock(50)) return false;
   const auto perform=[&]() -> bool {
-    using Command=BlueSquidCan::Command;
+    using Command=BlueSquidControl::Command;
     const auto& status=transportClient.status();
     if (kind.startsWith("rgb") && target<4 && status.outputAvailable(target)) {
       if (kind=="rgb" && value<=1) {
@@ -4001,17 +3971,6 @@ void setup() {
     Serial.println("Display backlight enabled");
   }
 
-  // EXIO5 selects CAN instead of native USB on this Waveshare board. The
-  // temporary RS-485 build does not need the onboard CAN transceiver.
-  auto* ioExpander = panel->getIO_Expander();
-  if (ioExpander != nullptr) {
-    auto expander = ioExpander->getBase();
-    expander->digitalWrite(5, BLUESQUID_TOUCH_RS485_BENCH ? 0 : 1);
-    delay(10);
-  } else {
-    Serial.println("Warning: display IO expander unavailable");
-  }
-
   if (!lvgl_port_init(panel->getLCD(), panel->getTouch())) {
     Serial.println("LVGL 9.5 initialization failed");
     return;
@@ -4024,7 +3983,7 @@ void setup() {
   touchscreenReady = true;
   lastUserActivityMs = millis();
   if (!transportClient.begin()) Serial.println("Transport initialization failed");
-  else transportClient.send(BlueSquidCan::Command::RequestStatus, 0, 0);
+  else transportClient.send(BlueSquidControl::Command::RequestStatus, 0, 0);
 }
 
 void loop() {
@@ -4041,17 +4000,6 @@ void loop() {
   }
   transportClient.update();
   TouchHotspot::update();
-#if BLUESQUID_TOUCH_RS485_BENCH
-  if (millis() - lastTransportLogMs >= 2000) {
-    lastTransportLogMs = millis();
-    Serial.printf("RS485 diagnostic: rx15=%lu rx16=%lu valid_frames=%lu selected_rx=%d online=%s\n",
-        static_cast<unsigned long>(transportClient.receivedByteCount15()),
-        static_cast<unsigned long>(transportClient.receivedByteCount16()),
-        static_cast<unsigned long>(transportClient.validFrameCount()),
-        transportClient.detectedRxPin(),
-        transportClient.connected() ? "yes" : "no");
-  }
-#endif
   refreshUi();
   delay(5);
 }

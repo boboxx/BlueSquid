@@ -1,9 +1,13 @@
+Historical design reference: this document includes superseded CAN, RS-485 or PCA9685 designs. For the current implemented connections, see docs/wiring.md and docs/rvc-fa75.md.
+
 # BlueSquid Protocol on the Shared RV-C CAN Network
 
 In the current isolated bench configuration, the rear controller is the source
 of truth and broadcasts status at 250 kbit/s using standard 11-bit CAN
 identifiers. Multi-byte values are little-endian. Protocol version 1 is defined
-in `include/BlueSquidCanProtocol.h`.
+were originally defined in `include/BlueSquidCanProtocol.h`. The active BLE command
+numbers are now declared in `include/BlueSquidControlProtocol.h`; the private CAN
+frame definitions described below are no longer built.
 
 The standard 11-bit identifiers below are the existing BlueSquid bench
 allocation. They must not be transmitted unchanged on a live RV-C network.

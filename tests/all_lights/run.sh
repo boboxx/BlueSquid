@@ -11,7 +11,7 @@ trap 'rm -f "$all_lights_binary"' EXIT HUP INT TERM
   -DBLUESQUID_BED_RGBW_BLUE_PIN=-1 -DBLUESQUID_BED_RGBW_WHITE_PIN=-1 \
   -I tests/all_lights/support -I include \
   -I lib/LightSwitchManager/src -I lib/OutputController/src \
-  -I lib/EventManager/src -I lib/PwmManager/src -I lib/SettingsManager/src \
+  -I lib/EventManager/src -I lib/SettingsManager/src \
   tests/all_lights/test.cpp lib/OutputController/src/OutputController.cpp \
   lib/LightSwitchManager/src/LightSwitchManager.cpp lib/EventManager/src/EventManager.cpp \
   -o "$all_lights_binary"

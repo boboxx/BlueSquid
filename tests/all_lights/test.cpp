@@ -1,19 +1,21 @@
 #include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include "AppConfig.h"
 #include "LightSwitchManager.h"
 #include "../../src/touchscreen/TouchRemoteStatus.h"
 
+static_assert(sizeof(PersistentDeviceState) == 41, "Keep saved device records readable");
+static_assert(offsetof(PersistentDeviceState, usbEnabled) == 37, "Preserve saved USB field offset");
+static_assert(offsetof(PersistentDeviceState, accessory4Requested) == 40, "Preserve saved accessory offset");
+
 uint32_t nowMs = 1000;
 int switchLevel = HIGH;
-bool pwmPresent = true;
 uint32_t millis() { return nowMs; }
 int digitalRead(int pin) { assert(pin == 35); return switchLevel; }
 void pinMode(int pin, int mode) {
   if (pin == 35) assert(mode == INPUT_PULLUP);
 }
-PwmManager::PwmManager(uint8_t address) : driver_(address) {}
-bool PwmManager::setPercent(uint8_t, uint8_t) { return pwmPresent; }
 uint8_t SettingsManager::loadLightGroupMask() { return 15; }
 bool SettingsManager::loadDeviceState(PersistentDeviceState&) { return false; }
 bool SettingsManager::saveDeviceState(const PersistentDeviceState&) { return true; }
@@ -29,14 +31,15 @@ void press(LightSwitchManager& button) {
 }
 
 void lightGroupToggle() {
-  PwmManager pwm(0x40); EventManager events; SettingsManager settings;
-  OutputController outputs(pwm, events, settings);
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings);
   outputs.begin();
   outputs.setRgbwExternal(0, true); outputs.setRgbwExternal(1, true);
   outputs.setRgbwPresetField(RgbwZone::Output1, 3, 12);
   outputs.setRgbwPresetField(RgbwZone::Output2, 3, 34);
   outputs.setUsbEnabled(true); outputs.setWaterPumpEnabled(true);
-  outputs.setAccessory3Enabled(true); outputs.setFanSpeed(43);
+  outputs.setAccessory3Enabled(true);
+  outputs.setRvcFanStatus(true, true, true, 43, false, 159, 1, 0, 0);
   LightSwitchManager button(outputs); button.begin();
   press(button);
   const auto& s = outputs.status();
@@ -54,13 +57,12 @@ void lightGroupToggle() {
 }
 
 void allFourRgbwLights() {
-  PwmManager pwm(0x40); EventManager events; SettingsManager settings;
-  OutputController outputs(pwm, events, settings); outputs.begin();
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
   outputs.setRgbwExternal(0, true); outputs.setRgbwExternal(1, true);
   outputs.setRgbwExternal(2, true); outputs.setRgbwExternal(3, true);
   outputs.setRgbwPresetField(RgbwZone::Output3, 4, 4); // CW-only installation
   outputs.setRgbwPresetField(RgbwZone::Output4, 4, 6); // WW + CW
-  pwmPresent = false; // missing PCA9685 cannot prevent SP630E light commands
   LightSwitchManager button(outputs); button.begin(); press(button);
   const auto& s = outputs.status();
   for (uint8_t z=0; z<2; ++z) {
@@ -74,16 +76,14 @@ void allFourRgbwLights() {
   press(button); assert(!outputs.anyLightsEnabled());
   nowMs += 200; outputs.update();
   assert(!outputs.anyLightsEnabled());
-  pwmPresent = true;
 }
 
 void unassignedRgbwDoesNotHoldToggleOn() {
-  PwmManager pwm(0x40); EventManager events; SettingsManager settings;
-  OutputController outputs(pwm, events, settings); outputs.begin();
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
   outputs.setRgbwExternal(0, true);
   // Stale state from a removed assignment must not count as a physical light.
   outputs.setRgbwChannel(RgbwZone::Output2, 3, 80);
-  pwmPresent = false;
   LightSwitchManager button(outputs); button.begin();
   press(button);
   assert(outputs.status().rgbw[0][3] == 100);
@@ -91,7 +91,6 @@ void unassignedRgbwDoesNotHoldToggleOn() {
   outputs.setRgbwChannel(RgbwZone::Output1, 3, 0);
   assert(!outputs.anyLightsEnabled());
   press(button); assert(outputs.status().rgbw[0][3] == 100);
-  pwmPresent = true;
 }
 
 void homeGroupStatusAndPhysicalToggle() {
@@ -112,10 +111,9 @@ void homeGroupStatusAndPhysicalToggle() {
   remote = {}; remote.usb = true; remote.fan = 100;
   assert(!remote.anyLightsEnabled());
 
-  PwmManager pwm(0x40); EventManager events; SettingsManager settings;
-  OutputController outputs(pwm, events, settings); outputs.begin();
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
   outputs.setRgbwExternal(0, true);
-  pwmPresent = false;
   LightSwitchManager button(outputs); button.begin();
   // Home transport handlers invoke this same action. GPIO must see that state.
   outputs.setAllLightsEnabled(true);
@@ -125,12 +123,11 @@ void homeGroupStatusAndPhysicalToggle() {
   outputs.setAllLightsEnabled(false);
   assert(!outputs.anyLightsEnabled());
   press(button); assert(outputs.status().rgbw[0][3] == 100);
-  pwmPresent = true;
 }
 
 void configurableGroup() {
-  PwmManager pwm(0x40); EventManager events; SettingsManager settings;
-  OutputController outputs(pwm, events, settings); outputs.begin();
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
   outputs.setRgbwExternal(0, true); outputs.setRgbwExternal(1, true);
   outputs.setRgbwChannel(RgbwZone::Output2, 3, 42);
   outputs.setRgbwExternal(2, true); outputs.setRgbwExternal(3, true);
@@ -162,7 +159,21 @@ void configurationBatchValidation() {
   assert(!parseSp630eConfiguration("1|0,0,none;", rows, group));
 }
 
-int main() { configurableGroup(); configurationBatchValidation();
+void fanRequiresRvcHandler() {
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings);
+  unsigned calls = 0;
+  outputs.setFanCommandHandler([&](uint8_t speed) { ++calls; return speed == 40; });
+  outputs.begin();
+  assert(calls == 0); // Startup never restores or transmits fan power.
+  assert(outputs.setFanSpeed(40) && calls == 1);
+  assert(!outputs.setFanSpeed(101) && calls == 1);
+  outputs.setFanCommandHandler({});
+  assert(!outputs.setFanSpeed(40));
+  assert(!outputs.setFanReverse(true));
+}
+
+int main() { fanRequiresRvcHandler(); configurableGroup(); configurationBatchValidation();
   homeGroupStatusAndPhysicalToggle();
   lightGroupToggle(); allFourRgbwLights(); unassignedRgbwDoesNotHoldToggleOn();
   puts("GPIO 35 all-lights tests passed");

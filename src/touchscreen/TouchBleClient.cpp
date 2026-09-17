@@ -344,9 +344,9 @@ void TouchBleClient::discoveryNotification(NimBLERemoteCharacteristic*,
   ++activeClient->sp630ePayloadRevision_;
 }
 
-bool TouchBleClient::send(BlueSquidCan::Command command, uint8_t target,
+bool TouchBleClient::send(BlueSquidControl::Command command, uint8_t target,
                           uint16_t value) {
-  if (command == BlueSquidCan::Command::SetRgbw) {
+  if (command == BlueSquidControl::Command::SetRgbw) {
     const uint8_t zone = target >> 4;
     const uint8_t channel = target & 0x0F;
     if (!connected() || zone > 3 || channel > 3 || value > 100) return false;
@@ -356,7 +356,7 @@ bool TouchBleClient::send(BlueSquidCan::Command command, uint8_t target,
     rgbwPending_[zone] = true;
     return true;
   }
-  if (command == BlueSquidCan::Command::SetRgbwPreset) {
+  if (command == BlueSquidControl::Command::SetRgbwPreset) {
     const uint8_t zone = target >> 4;
     const uint8_t field = target & 0x0F;
     if (!connected() || zone > 3 || field > 4 || value > 100) return false;
@@ -374,7 +374,7 @@ bool TouchBleClient::send(BlueSquidCan::Command command, uint8_t target,
   return sendValueCommand(command, target, value);
 }
 
-bool TouchBleClient::sendValueCommand(BlueSquidCan::Command command,
+bool TouchBleClient::sendValueCommand(BlueSquidControl::Command command,
                                       uint8_t target, uint16_t value) {
   if (!connected() || commandCharacteristic_ == nullptr) return false;
   uint8_t packet[BlueSquidBle::kCommandHeaderSize + 2]{};
@@ -390,7 +390,7 @@ bool TouchBleClient::sendRgbwState(uint8_t zone) {
   const uint16_t sequence = commandSequence_++;
   packet[0] = BlueSquidBle::kProtocolVersion;
   BlueSquidBle::writeU16(packet + 1, sequence);
-  packet[3] = static_cast<uint8_t>(BlueSquidCan::Command::SetRgbwState);
+  packet[3] = static_cast<uint8_t>(BlueSquidControl::Command::SetRgbwState);
   packet[4] = zone;
   packet[5] = 9;
   const uint8_t* channels = status_.rgbwChannels(zone);
@@ -548,22 +548,22 @@ void TouchBleClient::processAck(const uint8_t* data, size_t length) {
     return;
   }
   lastAckRevision_ = BlueSquidBle::readU32(data + 5);
-  if (data[3] == static_cast<uint8_t>(BlueSquidCan::Command::SetInverter) ||
-      data[3] == static_cast<uint8_t>(BlueSquidCan::Command::SetCharger)) {
+  if (data[3] == static_cast<uint8_t>(BlueSquidControl::Command::SetInverter) ||
+      data[3] == static_cast<uint8_t>(BlueSquidControl::Command::SetCharger)) {
     Serial.printf("Power control ACK: command=%u result=%u revision=%lu\n",
                   static_cast<unsigned>(data[3]),
                   static_cast<unsigned>(data[4]),
                   static_cast<unsigned long>(lastAckRevision_));
   }
   if (data[3] ==
-      static_cast<uint8_t>(BlueSquidCan::Command::SetRgbwState)) {
+      static_cast<uint8_t>(BlueSquidControl::Command::SetRgbwState)) {
     const uint8_t zone = data[9];
     const uint16_t sequence = BlueSquidBle::readU16(data + 1);
     if (zone < 4 && rgbwSequence_[zone] == sequence) {
       rgbwAwaitingAck_[zone] = false;
       if (data[4] != static_cast<uint8_t>(
                          BlueSquidBle::AckResult::Accepted)) {
-        sendValueCommand(BlueSquidCan::Command::RequestStatus, 0, 0);
+        sendValueCommand(BlueSquidControl::Command::RequestStatus, 0, 0);
       }
     }
   }

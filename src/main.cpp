@@ -1,20 +1,14 @@
 #include <Arduino.h>
-#include <Wire.h>
 
 #include "AppConfig.h"
 #include "BatteryManager.h"
 #include "BleManager.h"
 #include "CerboWifiManager.h"
-#if BLUESQUID_TOUCH_RS485_BENCH
-#include "BenchRs485Manager.h"
-#else
 #include "RvcFanManager.h"
-#endif
 #include "EventManager.h"
 #include "Logging.h"
 #include "LightSwitchManager.h"
 #include "OutputController.h"
-#include "PwmManager.h"
 #include "RgbwBleDriverManager.h"
 #include "Sp630eBleAdapter.h"
 #include "SensorManager.h"
@@ -27,8 +21,7 @@ constexpr char kTag[] = "Main";
 EventManager eventManager;
 SettingsManager settingsManager;
 CerboWifiManager cerboWifiManager(settingsManager);
-PwmManager pwmManager(AppConfig::I2c::kPca9685Address);
-OutputController outputController(pwmManager, eventManager, settingsManager);
+OutputController outputController(eventManager, settingsManager);
 RgbwBleDriverManager rgbwBleDriverManager(outputController);
 Sp630eBleAdapter sp630eControllers[5] = {
     {"SP630E controller 1"}, {"SP630E controller 2"},
@@ -40,17 +33,9 @@ SensorManager sensorManager(eventManager, settingsManager);
 BatteryManager batteryManager(eventManager, settingsManager);
 BleManager bleManager(eventManager, outputController, sensorManager,
                       batteryManager, settingsManager, cerboWifiManager);
-#if BLUESQUID_TOUCH_RS485_BENCH
-BenchRs485Manager transportManager(outputController, batteryManager,
-                                   sensorManager);
-#else
 RvcFanManager rvcFanManager(outputController, settingsManager);
-#endif
 
 uint32_t lastStatusPublishMs = 0;
-#if BLUESQUID_TOUCH_RS485_BENCH
-uint32_t lastRs485DiagnosticMs = 0;
-#endif
 bool appWasConnected = false;
 
 void configureSp630eAssignments() {
@@ -105,9 +90,6 @@ void publishPeriodicStatus() {
 
   const SystemStatus status = collectSystemStatus();
   bleManager.publishStatus(status);
-#if BLUESQUID_TOUCH_RS485_BENCH
-  transportManager.publishStatus(status);
-#endif
 }
 }  // namespace
 
@@ -117,12 +99,8 @@ void setup() {
   LOG_INFO(kTag, "%s firmware %s starting",
            AppConfig::kProductName, AppConfig::kFirmwareVersion);
 
-  Wire.begin(AppConfig::I2c::kSdaPin, AppConfig::I2c::kSclPin,
-             AppConfig::I2c::kFrequencyHz);
-
   settingsManager.begin();
   cerboWifiManager.begin();
-  pwmManager.begin();
   outputController.begin();
   lightSwitchManager.begin();
   sensorManager.begin();
@@ -130,11 +108,7 @@ void setup() {
   bleManager.begin();
   configureSp630eAssignments();
   rgbwBleDriverManager.begin();
-#if BLUESQUID_TOUCH_RS485_BENCH
-  transportManager.begin();
-#else
   rvcFanManager.begin();
-#endif
   batteryManager.startBackgroundTask();
 
   LOG_INFO(kTag, "System initialization complete");
@@ -146,33 +120,15 @@ void loop() {
   sensorManager.update();
   bleManager.update();
   cerboWifiManager.update();
-#if BLUESQUID_TOUCH_RS485_BENCH
-  transportManager.update();
-#else
   rvcFanManager.update();
-#endif
-#if BLUESQUID_TOUCH_RS485_BENCH
-  if (millis() - lastRs485DiagnosticMs >= 2000) {
-    lastRs485DiagnosticMs = millis();
-    LOG_INFO(kTag, "RS485 diagnostic: bytes=%lu valid_frames=%lu",
-             static_cast<unsigned long>(transportManager.receivedByteCount()),
-             static_cast<unsigned long>(transportManager.validFrameCount()));
-  }
-#endif
   if (lightSwitchManager.update()) {
     bleManager.publishStatus(collectSystemStatus());
-#if BLUESQUID_TOUCH_RS485_BENCH
-    transportManager.publishStatus(collectSystemStatus());
-#endif
     lastStatusPublishMs = millis();
   }
 
   const bool appConnected = bleManager.isClientConnected();
   if (appConnected && !appWasConnected) {
     bleManager.publishStatus(collectSystemStatus());
-#if BLUESQUID_TOUCH_RS485_BENCH
-    transportManager.publishStatus(collectSystemStatus());
-#endif
     lastStatusPublishMs = millis();
   }
   appWasConnected = appConnected;
@@ -180,7 +136,7 @@ void loop() {
   if (batteryManager.consumeStatusChanged()) {
     // Battery energy totals can change on every background sample. Let the
     // rate-limited publisher below send the latest snapshot instead of
-    // flooding the half-duplex RS-485 bus with complete status bursts.
+    // flooding BLE with complete status bursts.
     publishPeriodicStatus();
   }
 

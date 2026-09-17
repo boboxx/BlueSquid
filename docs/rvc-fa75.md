@@ -63,8 +63,7 @@ fields use all-one bits.
 
 The normal Controller build dedicates its TWAI port to RV-C at 250 kbit/s;
 BlueSquid's internal touchscreen connection remains BLE. Private BlueSquid CAN
-status/command traffic is not put on this bus. The optional RS-485 bench build
-retains its existing transport and does not start this RV-C driver.
+status/command traffic is not put on this bus. The obsolete private CAN and RS-485 transport implementations have been removed.
 
 Address probing and claiming, a control-panel diagnostic heartbeat and requested
 product identification are included. The development NAME uses manufacturer

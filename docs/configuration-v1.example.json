@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "settings": {
+    "battery_capacity_ah": 200,
+    "pitch_zero_degrees": 0,
+    "roll_zero_degrees": 0,
+    "touchscreen_sleep_minutes": 5,
+    "rvc_fan": {
+      "enabled": false,
+      "instance": 1,
+      "source_address": 159
+    }
+  },
+  "device": {
+    "rgbw_all": {
+      "label": "Lights",
+      "icon": "light",
+      "colour": 0
+    },
+    "rgbw_1": {
+      "label": "Pots - Front",
+      "icon": "light",
+      "colour": 11
+    },
+    "rgbw_2": {
+      "label": "Pots - Back",
+      "icon": "light",
+      "colour": 11
+    },
+    "rgbw_3": {
+      "label": "Accents - Front",
+      "icon": "light",
+      "colour": 11
+    },
+    "rgbw_4": {
+      "label": "Accent - Back",
+      "icon": "light",
+      "colour": 11
+    },
+    "accessory_1": {
+      "label": "USB",
+      "icon": "usb",
+      "colour": 0
+    },
+    "accessory_2": {
+      "label": "Pump",
+      "icon": "water",
+      "colour": 0
+    },
+    "accessory_3": {
+      "label": "Hot water",
+      "icon": "water",
+      "colour": 0
+    },
+    "accessory_4": {
+      "label": "Accessory 4",
+      "icon": "settings",
+      "colour": 0
+    }
+  },
+  "outputs": {
+    "rgbw_1": {
+      "on": false,
+      "output_rgbw_percent": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "preset_rgb_percent": [
+        100,
+        0,
+        0
+      ],
+      "preset_brightness_percent": 100,
+      "colour_selected": false,
+      "warm_white_selected": true,
+      "cool_white_selected": false
+    },
+    "rgbw_2": {
+      "on": false,
+      "output_rgbw_percent": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "preset_rgb_percent": [
+        100,
+        0,
+        0
+      ],
+      "preset_brightness_percent": 100,
+      "colour_selected": false,
+      "warm_white_selected": true,
+      "cool_white_selected": false
+    },
+    "rgbw_3": {
+      "on": false,
+      "output_rgbw_percent": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "preset_rgb_percent": [
+        100,
+        0,
+        0
+      ],
+      "preset_brightness_percent": 100,
+      "colour_selected": false,
+      "warm_white_selected": true,
+      "cool_white_selected": false
+    },
+    "rgbw_4": {
+      "on": false,
+      "output_rgbw_percent": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "preset_rgb_percent": [
+        100,
+        0,
+        0
+      ],
+      "preset_brightness_percent": 100,
+      "colour_selected": false,
+      "warm_white_selected": true,
+      "cool_white_selected": false
+    },
+    "fan": {
+      "speed_percent": 0
+    },
+    "accessory_1": {
+      "enabled": false
+    },
+    "accessory_2": {
+      "enabled": false,
+      "restart_policy": "always_off"
+    },
+    "accessory_3": {
+      "enabled": false,
+      "restart_policy": "always_off"
+    },
+    "accessory_4": {
+      "enabled": false
+    }
+  }
+}

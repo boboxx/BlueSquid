@@ -1,0 +1,53 @@
+#pragma once
+
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+#include "EventManager.h"
+#include "SettingsManager.h"
+#include "SystemTypes.h"
+
+enum class JkBmsMonitorMode : uint8_t { Off = 0, PowerPage = 2 };
+
+class BatteryManager {
+ public:
+  BatteryManager(EventManager& eventManager, SettingsManager& settingsManager);
+
+  bool begin();
+  bool startBackgroundTask();
+  void update();
+  BatteryStatus status() const;
+  bool consumeStatusChanged();
+  float capacityAh() const;
+  bool setCapacityAh(float capacityAh);
+  bool setInverterEnabled(bool enabled);
+  bool setChargerEnabled(bool enabled);
+  uint8_t vebusUnitId() const { return vebusUnitId_; }
+  bool setVebusUnitId(uint8_t unitId);
+  // Kept temporarily so older v1 apps can connect during the protocol upgrade.
+  String jkBmsAddresses() const { return String(); }
+  bool setJkBmsAddresses(const String&) { return true; }
+  String discoverJkBmsDevices() { return String(); }
+  void setJkBmsMonitorMode(JkBmsMonitorMode) {}
+  void requestJkBmsRefresh() {}
+
+ private:
+  struct CerboPort;
+  static void taskEntry(void* context);
+  void taskLoop();
+  void commitStatus(const BatteryStatus& status);
+  void updateEnergyTotals(BatteryStatus& status, uint32_t now);
+
+  EventManager& eventManager_;
+  SettingsManager& settingsManager_;
+  BatteryStatus status_{};
+  bool statusChanged_ = false;
+  uint32_t lastEnergyMs_ = 0;
+  float capacityAh_ = 0.0F;
+  TaskHandle_t taskHandle_ = nullptr;
+  volatile int8_t pendingInverterMode_ = -1;
+  volatile uint8_t vebusUnitId_ = 227;
+  CerboPort* cerbo_ = nullptr;
+  mutable portMUX_TYPE statusMux_ = portMUX_INITIALIZER_UNLOCKED;
+};

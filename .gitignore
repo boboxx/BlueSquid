@@ -1,0 +1,20 @@
+.pio/
+.vscode/
+.DS_Store
+
+# Private configuration and credentials
+platformio.local.ini
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local backups, exported firmware, and generated files
+archives/
+/BlueSquid.zip
+*.bin
+*.elf
+*.map
+__pycache__/
+*.pyc

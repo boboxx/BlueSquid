@@ -1,0 +1,626 @@
+BLUESQUID REAR CONTROLLER PCB DESIGN BRIEF FOR FLUX.AI
+Revision: Draft A
+Date: 2026-08-20
+Project repository: BlueSquid_v1
+
+IMPORTANT STATUS
+================
+
+This document is an engineering input brief, not a fabrication-approved design.
+Flux.AI should use it to create a preliminary architecture, schematic, PCB and
+BOM. Ratings marked TBD must be confirmed before schematic sign-off. Do not
+silently select a value or infer a safety rating for a TBD item.
+
+The first custom PCB should be a serviceable rear-controller carrier and I/O
+board. The 7-inch front touchscreen is an existing Waveshare
+ESP32-S3-Touch-LCD-7 assembly and must not be recreated on this PCB.
+
+No 120 VAC conductors or switching contacts are permitted on the BlueSquid PCB.
+The PCB may operate protected low-voltage contactor coils that control mains
+equipment in a separate approved enclosure.
+
+
+1. PROJECT PURPOSE
+==================
+
+BlueSquid is a camper-van monitoring and control system. It has:
+
+1. A front 7-inch ESP32-S3 touchscreen near the camper door.
+2. A rear ESP32-S3 controller close to the electrical equipment and loads.
+3. A persistent bonded BLE communications link between the front and rear nodes.
+4. Separate interfaces for Victron equipment and Dometic RV-C equipment.
+5. Dimmable 12 V lighting, low-voltage accessory controls, sensor inputs,
+   equipment feedback and room for future expansion.
+
+The rear controller, hard switches and safety logic must operate without Wi-Fi,
+Bluetooth or Ethernet. The touchscreen uses BLE as its primary convenience
+interface; losing that link must not change output state or disable local rear
+control.
+
+
+2. INSTALLATION CONTEXT
+=======================
+
+Nominal DC system: 12 V camper/automotive electrical system.
+
+Battery bank: three 12 V 300 Ah LiFePO4 batteries. The current assumption is
+three batteries in parallel, for 12 V nominal and 900 Ah total. Confirm the
+actual series/parallel wiring and the battery manufacturer's allowed voltage
+range before fixing any PCB input-voltage rating.
+
+Victron equipment currently planned/installed:
+
+- Cerbo GX
+- SmartShunt 500 A
+- SmartSolar MPPT 150/45
+- Orion XS 12/12-50 A DC/DC charger (confirm exact model name)
+
+The rear cabinet will also contain or interface with:
+
+- front and rear 12 V pot-light circuits
+- front and rear RGBW ambiance-light circuits
+- 12 V feeds for local USB converters
+- water-pump control
+- external 120 V contactors for outlets and water heater
+- Dometic equipment, if its exact model supports RV-C
+- cabin temperature/humidity and camper pitch/roll sensors
+
+
+3. RECOMMENDED REV-A PCB SCOPE
+=============================
+
+Preferred architecture: a modular rear carrier board with replaceable modules
+and field-serviceable connectors. Use an ESP32-S3-DevKitC-1-N8R8 on female
+headers for Rev A rather than placing a bare ESP32-S3 module directly on the
+PCB. This makes early hardware repair and firmware recovery easier. Flux may
+also propose a later Rev B using an ESP32-S3-WROOM module, but it must be a
+separate option and must include the antenna keepout and USB/programming design.
+
+Rev A should contain or provide footprints/connectors for:
+
+- protected 12 V power entry and regulated logic power
+- replaceable ESP32-S3-DevKitC-1-N8R8
+- one shared 3.3 V I2C expansion bus
+- PCA9685 16-channel PWM controller
+- MCP23017 16-bit slow digital I/O expander
+- protected low-side PWM MOSFET lighting channels
+- protected low-voltage relay/contactor coil drivers
+- dry-contact/protected digital inputs and output-feedback inputs
+- headers for the already-ordered Waveshare-compatible two-channel isolated
+  CAN board: one RV-C channel and one Victron VE.Can channel
+- rear microSD interface for history/logging, if reliable coexistence with the
+  communications interfaces is demonstrated
+- service connectors, test points, status indicators, BOOT and RESET access
+
+For safety and thermal serviceability, Flux should also show an alternate
+two-board design:
+
+- logic/communications controller PCB
+- fused high-current lighting/coil-output daughterboard
+
+Do not combine high-current load paths with sensitive logic merely to reduce
+board count. Provide the thermal and current analysis before choosing the
+single-board implementation.
+
+
+4. COMMUNICATION NETWORKS
+=========================
+
+There are exactly two distinct CAN networks.
+
+A. RV-C CAN NETWORK
+
+This network is shared by the rear BlueSquid controller, future BlueSquid nodes
+and compatible RV-C equipment. The front touchscreen is not connected to it.
+
+- Rear interface: channel 1 of the isolated dual-CAN board
+- Expected bit rate: 250 kbit/s, subject to verification against the RV-C devices
+- Physical topology: one linear trunk with short stubs, not a star
+- Termination: exactly one 120-ohm terminator at each physical end of the
+  complete shared network
+- Cable: 120-ohm CAN twisted pair, with a separate power pair if one combined
+  cable is used
+- Connector signals: CAN_H, CAN_L, isolated bus reference and optional shield
+
+The Waveshare touchscreen's onboard CAN transceiver remains unused and is a
+future service fallback. The rear controller connects through one isolated
+channel of the ordered dual-CAN board.
+
+Using the RV-C network imposes protocol requirements:
+
+- BlueSquid message identifiers must be selected so they do not collide with
+  any RV-C PGNs or source addresses
+- firmware must follow RV-C addressing, arbitration and bus-load requirements
+- startup should be listen-only until the installed RV-C traffic is identified
+- malformed or excessive BlueSquid traffic must not interfere with appliance
+  control
+- loss or reset of the rear BlueSquid node must not hold the bus dominant
+- exact Dometic model, connector, bit rate, PGNs and safe fallback behaviour
+  must be verified before RV-C control is enabled
+
+B. VICTRON VE.CAN NETWORK
+
+Channel 2 of the dual-CAN board is dedicated to the Cerbo GX VE.Can network.
+It must remain electrically isolated from the RV-C network.
+
+- rear interface: channel 2 of the isolated dual-CAN board
+- expected bit rate: 250 kbit/s for the selected Cerbo VE.Can profile; confirm
+  the configured Cerbo port/profile before firmware and termination sign-off
+- provide ESD/transient protection and galvanic isolation
+- provide selectable 120-ohm termination; enable it only when BlueSquid is at
+  a physical end of the VE.Can segment
+- use a passive verified Victron RJ45 pigtail/connector and clearly label it
+  "VE.CAN - NOT ETHERNET"
+
+Relevant Victron RJ45 signals:
+
+- pin 7: CAN-H
+- pin 8: CAN-L
+- pin 3: NET-C/reference
+- pin 6: NET-S supply; do not connect NET-S to ESP32 5 V or 3.3 V rails
+
+BlueSquid is initially a receive-only application client for Cerbo energy data.
+It must identify the correct battery, MPPT and DC/DC sources/instances and mark
+values stale if the VE.Can link is lost.
+
+C. OPTIONAL DEVELOPMENT/SERVICE RS-485
+
+GPIO1 RX and GPIO2 TX may be preserved on an optional service header for the
+existing 115200-baud development bridge. RS-485 is not the production Victron
+interface. If fitted, use an automatic-direction isolated RS-485 circuit. This
+header must not interfere with either production CAN network.
+
+D. DUAL EXTERNAL CAN MODULE INTERFACE
+
+The ordered Waveshare-compatible two-channel isolated CAN board is expected to
+use two MCP2515 controllers sharing SPI. Confirm its actual schematic, crystal
+frequency, isolation topology, transceivers, logic-voltage jumper and connector
+pinout before producing the carrier footprint.
+
+Provisional rear ESP32-S3 allocation:
+
+- GPIO10: external CAN SPI SCK
+- GPIO11: external CAN SPI MISO
+- GPIO12: external CAN SPI MOSI
+- GPIO13: RV-C MCP2515 chip select
+- GPIO14: Victron VE.Can MCP2515 chip select
+- GPIO15: RV-C MCP2515 interrupt
+- GPIO16: Victron VE.Can MCP2515 interrupt
+
+Use 3.3 V logic. The ordered board may require regulated 5 V power while its
+logic-voltage selector is set to 3.3 V. Do not copy this assumption into the
+schematic until the actual module is verified.
+
+
+5. FRONT TOUCHSCREEN CONNECTION
+================================
+
+Front device: Waveshare ESP32-S3-Touch-LCD-7, 7-inch capacitive touchscreen.
+
+No communications cable is required between front and rear. Run only the
+appropriately fused supply cable for the touchscreen's local protected 5 V
+converter. Optional service pads may expose the Waveshare CAN/RS-485 signals,
+but they are not part of the installed control path.
+
+The touchscreen must receive protected regulated 5 V, not raw camper 12 V.
+Prefer separate protected front and rear DC/DC supplies so one node cannot take
+down the other. Final touchscreen current requirement and converter headroom
+must be taken from the exact Waveshare board documentation and measured under
+full backlight/SD/BLE load.
+
+Legacy source can use the touchscreen's onboard RS-485 for service testing:
+
+- touchscreen RS-485 RX: GPIO16
+- touchscreen RS-485 TX: GPIO15
+- rear RS-485 RX: GPIO1
+- rear RS-485 TX: GPIO2
+- 115200 baud
+
+This connection is disabled in the production build.
+
+
+6. PRODUCTION GPIO AND BUS PLAN
+==============================
+
+The following is the preferred production allocation:
+
+- GPIO8: shared rear I2C SDA
+- GPIO9: shared rear I2C SCL
+- GPIO10: dual-CAN-board SPI SCK
+- GPIO11: dual-CAN-board SPI MISO
+- GPIO12: dual-CAN-board SPI MOSI
+- GPIO13: RV-C CAN controller CS
+- GPIO14: Victron VE.Can controller CS
+- GPIO15: RV-C CAN interrupt
+- GPIO16: Victron VE.Can interrupt
+- GPIO4: rear microSD SCK on separate SPI bus
+- GPIO5: rear microSD MISO
+- GPIO6: rear microSD MOSI
+- GPIO7: rear microSD CS
+- GPIO1/GPIO2: optional isolated RS-485/service UART fallback
+- remaining verified non-strapping GPIO: enables, interrupts and service input
+
+This allocation is provisional. Flux must check the exact DevKitC header map,
+boot-strapping pins, USB/JTAG use, PSRAM/flash restrictions and input/output
+capability before routing.
+
+CURRENT BENCH MAP - DO NOT COPY TO THE PRODUCTION PCB:
+
+- HTU21D uses a separate I2C bus on GPIO10/GPIO11
+- GY-61/ADXL335 uses analog GPIO4/GPIO5/GPIO6
+- direct RGBW prototypes use GPIO12 through GPIO18 and GPIO21
+- hard all-lights button uses GPIO35
+
+These current assignments overlap the proposed CAN and SD interfaces. The
+production PCB should remove those conflicts by using the PCA9685, MCP23017,
+SHT31 and LIS3DH described below.
+
+
+7. I2C DEVICE PLAN
+==================
+
+Shared 3.3 V I2C bus on GPIO8/GPIO9, initially 400 kHz where all installed
+devices and wiring support it. Provide correctly calculated pull-ups and do not
+populate duplicate strong pull-ups on every module.
+
+Planned addresses:
+
+- LIS3DH pitch/roll accelerometer: 0x18
+- MCP23017 digital I/O expander: 0x20
+- PCA9685 PWM controller: 0x40
+- SHT31 temperature/humidity sensor: 0x44
+- optional ADS1115 ADC: 0x48
+- optional DS3231 RTC: 0x68
+
+Use SHT31 instead of HTU21D because HTU21D conflicts with PCA9685 at address
+0x40. Use LIS3DH instead of the analog GY-61/ADXL335 to reduce analog wiring and
+free GPIO. The cabin sensor should be remote from warm power electronics; give
+it a keyed low-voltage connector rather than measuring PCB enclosure air.
+
+Expose one expansion I2C connector with 3V3, GND, SDA and SCL. This connector
+is for short, local protected wiring only, not a long camper-wide bus.
+
+
+8. LIGHTING OUTPUTS
+===================
+
+Current functional requirement:
+
+- front pot lights: one independently dimmable white 12 V circuit
+- rear pot lights: one independently dimmable white 12 V circuit
+- front ambiance light: one independently controlled common-positive RGBW zone
+- rear ambiance light: one independently controlled common-positive RGBW zone
+- spare dimmable channels for expansion
+
+Minimum active channel count is 10: two white channels plus eight RGBW
+channels. Provide at least 12 protected channels; using all 16 PCA9685 channels
+is preferred if board area and thermal capacity permit.
+
+Use generic PCB and connector names so firmware-configured labels can change:
+
+- PWM_OUT_1 through PWM_OUT_16
+- RGBW grouping may be shown in documentation, but silkscreen must not lock a
+  channel to a room name
+
+Electrical requirements:
+
+- PCA9685 creates PWM logic only and must never drive LED loads directly
+- 12 V common-positive LED loads use protected low-side N-channel switching
+- select MOSFETs that are fully enhanced by the implemented gate-drive voltage
+- do not assume an arbitrary "logic-level" MOSFET is suitable; verify RDS(on)
+  at the actual gate voltage and hot junction temperature
+- PCA9685 outputs are open-drain; design the pull-up/gate-driver network so
+  every MOSFET is positively off during reset, unpowered states and I2C faults
+- include gate resistance and gate-to-source pulldown/off bias
+- outputs must default OFF at boot and while the ESP32 is held in reset
+- target PWM frequency is approximately 1 kHz unless EMC/acoustic testing
+  indicates another value
+- provide branch-current test points and enough copper/thermal vias
+- keep high-current LED returns out of the ESP32/sensor ground paths
+- run both positive and switched-negative conductors to each load
+- do not use vehicle chassis as the switched RGBW return
+- size each RGBW common-positive conductor for the sum of all four channels
+
+Preliminary development limit is approximately 2 A continuous per channel,
+but this is NOT a final PCB rating. Flux must request/receive the real maximum
+current, cable length, wire gauge, fuse value and duty cycle for every output
+before selecting MOSFETs, connectors, copper weight and thermal design.
+
+Every lighting branch must be separately fused. Preferred Rev-A arrangement is
+an external automotive fuse block close to the supply, unless the PCB includes
+properly rated, accessible and replaceable fuse holders.
+
+
+9. ACCESSORY OUTPUTS
+====================
+
+Use generic names such as ACC_OUT_1 through ACC_OUT_8. User-visible labels and
+icons are configured in software and exported/imported through the touchscreen.
+
+Planned functions include USB power enables, water pump and external contactor
+coils. These functions do not all use the same power stage.
+
+A. LOW-VOLTAGE COIL OUTPUTS
+
+- MCP23017 provides slow logic I/O
+- ULN2803A or individually selected protected drivers sink 12 V relay/contactor
+  coils
+- if ULN2803A is used, connect its COM/flyback-diode node correctly to the coil
+  supply and verify coil current and dissipation
+- provide OFF-at-reset bias independent of firmware
+- provide optional feedback input for important commanded loads
+- exact number, coil voltage and coil current are TBD
+
+B. USB OUTLETS
+
+Switch a fused 12 V feed to a local automotive USB converter at the outlet.
+Do not distribute 5 V from the rear PCB through the camper. A nominal 60 W USB
+outlet can draw roughly 5 A or more from 12 V after losses; the PCB output may
+therefore need to control an external relay/high-side switch rather than carry
+the outlet current. Exact outlet count and power are TBD.
+
+C. WATER PUMP
+
+The pump is a motor with significant start/stall current. Do not connect it to
+a lighting MOSFET channel. Drive a correctly rated automotive relay/contactor
+or protected high-side motor switch. Preserve a physical manual override and
+make the default restart state OFF. Pump model, running current, stall/inrush
+current and fuse are TBD.
+
+D. 120 V OUTLETS AND WATER HEATER
+
+Never route 120 VAC onto this PCB. The PCB may drive only an isolated protected
+12 V coil of an external, code-appropriate two-pole contactor. Mains wiring,
+breaker/GFCI and contactor contacts remain in a separate approved enclosure.
+The water heater's thermostat and thermal cutoff remain functional. Provide a
+physical OFF/AUTO or OFF/AUTO/ON selector and a safe OFF reset state.
+
+
+10. INPUTS AND FEEDBACK
+=======================
+
+Provide generic DIN_1 through DIN_16 names using MCP23017 and/or protected
+native inputs. Expected uses include momentary hard switches, relay auxiliary
+contacts, pump status, alarm contacts and future expansion.
+
+Dry-contact input requirements:
+
+- 3.3 V logic
+- defined pull-up/pull-down
+- series current limiting
+- RC filtering/debounce
+- ESD/transient protection
+- keyed signal-and-ground connector
+- no floating connector pins
+
+Do not accept raw vehicle 12 V on a dry-contact input. If 12 V sense inputs are
+desired, create a separately labelled protected 12V_DIN circuit using an
+automotive-rated divider/comparator, optocoupler or digital-input IC. Define
+its off/on thresholds, reverse-voltage survival and transient rating.
+
+At least one entry/emergency light should retain a direct hard-wired manual
+fallback that does not depend on the touchscreen, CAN network or firmware.
+
+Front local controls are expected to use an ADS1115 behind the touchscreen:
+
+- A0: resistor ladder for momentary switches
+- A1: PIR motion sensor
+- A2: ambient-light sensor divider
+- A3: spare
+
+This front ADS1115 normally belongs near the touchscreen and is not part of the
+rear PCB. Its inputs must remain between 0 V and 3.3 V.
+
+
+11. POWER ENTRY AND PROTECTION
+==============================
+
+The PCB is connected to a noisy nominal-12 V RV/vehicle environment. The input
+stage must include or explicitly require:
+
+- correctly sized source fuse close to the battery/distribution bus
+- reverse-polarity protection
+- over-current protection
+- surge/load-dump/transient suppression appropriate to the selected design
+  standard
+- undervoltage and overvoltage behaviour that leaves outputs safe
+- input and regulator filtering for CAN, sensors and ESP32 stability
+- brownout handling and watchdog recovery
+
+Do not choose a maximum input voltage from the phrase "12 V". Confirm battery
+charge voltage and the vehicle transient standard/test pulse that Rev A must
+survive. Flux should propose the protection components and show their energy,
+voltage and temperature margins.
+
+Preferred prototype power arrangement:
+
+- protected external automotive/RV 12 V to 5 V converter module for the rear
+  controller, connected through a keyed power connector
+- separate protected 12 V to 5 V supply for the front touchscreen
+- local low-noise 3.3 V regulation/decoupling as required by the selected
+  controller/modules
+
+An isolated 5 V module such as the Mean Well RSD/DDR class may be evaluated,
+but no exact converter is approved yet. Produce a power budget for ESP32 peak
+load, CAN modules, SD card, sensors, PWM logic, relay coils and indicator LEDs.
+
+Separate these current paths in placement/routing:
+
+- logic and sensors
+- CAN/RS-485 interfaces
+- relay/contactor coils
+- LED load currents
+
+Use deliberate star/partitioned returns so LED and coil current does not flow
+through sensor or ESP32 ground paths. Preserve galvanic-isolation boundaries;
+do not bridge them with copper pours, shields or programming cables without an
+explicit design decision.
+
+
+12. CONNECTORS AND SERVICEABILITY
+=================================
+
+Preferred connector policy:
+
+- pluggable, touch-safe terminal blocks for field power and load wiring
+- keyed locking connectors for sensors and low-current signals
+- ferrule-compatible terminals for stranded camper wiring
+- separate connectors for each CAN network to prevent accidental cross-connection
+- connector current/temperature rating must exceed the protected circuit rating
+- no unkeyed identical connector should make it easy to apply 12 V to 3.3 V I/O
+
+Required service features:
+
+- accessible ESP32 USB programming connector
+- accessible BOOT and RESET controls
+- labelled 3V3, 5V, 12V, GND and isolated-ground test points
+- SDA/SCL, SPI, UART and CAN TX/RX test points
+- CAN_H/CAN_L test points on every isolated bus side
+- status LEDs that can be disabled for low-power operation
+- mounting holes and mechanical keepouts
+- replaceable controller and communications modules where practical
+- clear pin-1, polarity, fuse and termination markings
+
+All field channel names should remain generic on the PCB. Room/device names are
+assigned by the touchscreen configuration manager and included in SD-card
+configuration export/import.
+
+
+13. PCB LAYOUT REQUIREMENTS
+===========================
+
+Flux should propose stackup after completing the current and EMC analysis.
+Preferred starting point is four layers for continuous reference planes and
+clean signal routing. If significant lighting current is routed on-board,
+evaluate 2 oz outer copper, connector heating, trace/via temperature rise and
+fault current. Keeping high-current switching on a daughterboard may be safer
+and easier to service.
+
+Layout constraints:
+
+- ESP32 antenna at a board edge with the full manufacturer keepout: no copper,
+  traces, components, enclosure metal or cable bundles in the keepout
+- keep switch-node, MOSFET, LED and coil paths away from sensors, antenna and
+  communication clocks
+- short local decoupling at every IC and module connector
+- controlled, closely coupled CAN differential routing on the PCB
+- TVS/ESD parts adjacent to external connectors
+- isolation creepage/clearance per the selected isolator, working voltage and
+  pollution environment
+- no 120 V creepage zone is required because no mains may enter this PCB
+- thermal vias and copper spreading for power devices, backed by calculation
+- avoid routing high-current returns through logic ground necks
+- allow enclosure airflow and service access to terminal screws/fuses
+- provide silkscreen readable after modules are installed
+
+
+14. FIRMWARE AND FAIL-SAFE BEHAVIOUR
+====================================
+
+Firmware platform: Arduino framework on ESP32-S3 using PlatformIO.
+
+Relevant current behaviour:
+
+- rear controller owns physical outputs and continues safe operation without
+  the touchscreen
+- labels/icons are configurable and therefore must not be hard-coded into PCB
+  channel names
+- device state/settings are persisted in controller nonvolatile storage
+- touchscreen can export/import the current configuration using its SD card
+- screen sleep and communications loss must not change output state unexpectedly
+- BLE application protocol has sequence-numbered commands, acknowledgements,
+  state revisions and online status
+
+Hardware must support these fail-safe rules even before firmware starts:
+
+- lighting, pump and contactor commands default OFF
+- no momentary boot pulse on a gate or relay driver
+- MCU reset or unplugging a module cannot directly energize a load
+- mains contactors require an explicit valid command and retain independent
+  appliance safety devices/manual disconnects
+- use watchdog and brownout reset
+- include an output-enable strategy if it improves deterministic startup safety
+
+
+15. ITEMS THAT MUST BE CONFIRMED BEFORE SCHEMATIC FREEZE
+========================================================
+
+1. Exact rear ESP32-S3-DevKitC-1 board revision and header dimensions.
+2. Whether Rev A is one combined board or logic plus power-output daughterboard.
+3. Exact current, fuse, conductor and cable length for every light channel.
+4. Exact RGBW strip/pot-light electrical topology and common-positive confirmation.
+5. Exact count/current of USB outlets, relays, contactors and feedback inputs.
+6. Water-pump model, running current, start/stall current and manual override.
+7. 12 V input operating range and automotive/RV transient test requirement.
+8. Selected 5 V converter(s) and measured front/rear peak power.
+9. Exact ordered dual isolated CAN board schematic, pinout and dimensions.
+10. Exact Dometic appliance/controller model, RV-C connector and supported messages.
+11. RV-C identifiers, addressing and measured bus load.
+12. Termination locations for the RV-C bus and VE.Can bus.
+13. Exact Cerbo GX model, VE.Can port/profile, bit rate and published sources.
+14. Enclosure dimensions, mounting pattern, ambient temperature and airflow.
+15. Preferred field connector family and available wire gauges.
+16. Whether rear SD logging remains on Rev A and required card connector type.
+
+
+16. REQUESTED FLUX.AI OUTPUTS
+=============================
+
+Please produce the following in reviewable stages. Do not proceed directly to
+manufacturing files without resolving the TBD list.
+
+Stage 1 - architecture review
+
+- system block diagram with all isolation and power domains
+- single-board and two-board architecture comparison
+- preliminary power/current/thermal budget
+- GPIO, peripheral and connector allocation table
+- conflict check against ESP32-S3 boot/USB/PSRAM constraints
+- list of assumptions and unresolved safety/rating questions
+
+Stage 2 - schematic
+
+- hierarchical sheets for power/protection, ESP32 carrier, I2C devices,
+  communications, PWM outputs, coil outputs, digital inputs and connectors
+- manufacturer part numbers, not generic unlabeled parts
+- component voltage/current/temperature derating notes
+- selectable CAN termination and visible isolation boundaries
+- test points and safe reset biasing
+- ERC report and design-review checklist
+
+Stage 3 - PCB
+
+- board outline coordinated with enclosure and service access
+- proposed stackup and copper weight
+- isolation, antenna and high-current keepouts
+- trace/via current and temperature-rise calculations
+- thermal analysis for worst-case simultaneous outputs
+- EMI/ESD review for the RV environment
+- DRC report and 3D assembly review
+
+Stage 4 - manufacturing package after approval
+
+- Gerbers and drill files
+- pick-and-place/centroid file
+- BOM with supplier/manufacturer part numbers and alternates
+- assembly drawings
+- connector/pinout and wiring document
+- bring-up/test procedure and test-point table
+- revision-controlled schematic and PCB source
+
+
+17. DESIGN PRIORITIES
+=====================
+
+In order of importance:
+
+1. Electrical and fire safety.
+2. Fail-safe behaviour and manual fallback for critical functions.
+3. Safe RV-C coexistence and isolation between RV-C and VE.Can.
+4. Serviceability and clear field wiring.
+5. Rear control and safe output behaviour without Wi-Fi/Bluetooth/Ethernet.
+6. Expandability through generic channels and buses.
+7. Compact size, provided it does not compromise heat, isolation or repair.
+8. Cost.
+
+END OF BRIEF

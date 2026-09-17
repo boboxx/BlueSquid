@@ -74,5 +74,3 @@ The optimized touchscreen BLE protocol is in `include/BlueSquidBleProtocol.h`.
 CAN connections and termination are documented in `docs/wiring.md`.
 The complete proposed hardware, cost and implementation review is in
 `docs/system-overview.md`.
-
-Local backups, build outputs and private configuration are excluded from this repository.

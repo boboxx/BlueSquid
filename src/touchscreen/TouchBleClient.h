@@ -8,6 +8,7 @@
 #include <freertos/semphr.h>
 
 #include "BlueSquidControlProtocol.h"
+#include "BleReconnectWatchdog.h"
 #include "TouchRemoteStatus.h"
 
 class NimBLEAdvertisedDevice;
@@ -65,7 +66,7 @@ class TouchBleClient {
 
   TouchRemoteStatus status_{};
   NimBLEAddress rearAddress_;
-  bool rearAddressValid_ = false;
+  std::atomic_bool rearAddressValid_{false};
   portMUX_TYPE scanMutex_ = portMUX_INITIALIZER_UNLOCKED;
   struct ConfigurationRequest {
     bool config;
@@ -81,14 +82,18 @@ class TouchBleClient {
   String sp630ePayload_;
   uint32_t sp630ePayloadRevision_ = 0;
   uint16_t commandSequence_ = 1;
-  uint32_t lastConnectAttemptMs_ = 0;
+  std::atomic<uint32_t> lastConnectAttemptMs_{0};
   uint32_t receivedSnapshotCount_ = 0;
   uint32_t receivedAckCount_ = 0;
   uint32_t lastAckRevision_ = 0;
-  bool connectRequested_ = false;
+  std::atomic_bool connectRequested_{false};
   SemaphoreHandle_t connectionWake_ = nullptr;
   TaskHandle_t connectionTask_ = nullptr;
   std::atomic_bool connectionInProgress_{false};
+  BleReconnectWatchdog reconnectWatchdog_;
+  uint32_t lastHealthLogMs_ = 0;
+  uint32_t lastScanAttemptMs_ = 0;
+  std::atomic<const char*> connectionStage_{"idle"};
   bool initialized_ = false;
   bool displaySleeping_ = false;
   bool assignmentRefreshPending_ = true;

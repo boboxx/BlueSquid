@@ -1,5 +1,6 @@
 .pio/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .DS_Store
 
 # Private configuration and credentials
@@ -18,3 +19,6 @@ archives/
 *.map
 __pycache__/
 *.pyc
+
+# Serial monitor captures
+logs/

@@ -8,6 +8,7 @@
 #include <ArduinoJson.h>
 #include <esp_display_panel.hpp>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 #include <lvgl.h>
 #include <FS.h>
 #include <Preferences.h>
@@ -303,7 +304,6 @@ lv_obj_t* systemConnectionLabel = nullptr;
 lv_obj_t* systemRearFirmwareLabel = nullptr;
 lv_obj_t* systemUptimeLabel = nullptr;
 uint32_t lastUiUpdateMs = 0;
-uint32_t lastTransportLogMs = 0;
 uint32_t calibrationRequestedMs = 0;
 bool touchscreenReady = false;
 bool displaySleeping = false;
@@ -3308,13 +3308,6 @@ void createSystemInfoOverlay() {
   snprintf(protocol, sizeof(protocol), "BlueSquid v%u",
            BlueSquidControl::kProtocolVersion);
   addSystemInfoRow(card, 100, "Control protocol", protocol, true);
-  if (millis() - lastTransportLogMs >= 2000) {
-    lastTransportLogMs = millis();
-    Serial.printf("BLE diagnostic: snapshots=%lu acks=%lu online=%s\n",
-        static_cast<unsigned long>(transportClient.receivedSnapshotCount()),
-        static_cast<unsigned long>(transportClient.receivedAckCount()),
-        transportClient.connected() ? "yes" : "no");
-  }
   systemConnectionLabel =
       addSystemInfoRow(card, 200, "Controller connection", "Offline", true);
   systemUptimeLabel =
@@ -3936,7 +3929,8 @@ bool remoteCommand(const String& kind,uint8_t target,uint32_t value) {
 void setup() {
   Serial.begin(115200);
   delay(250);
-  Serial.println("BlueSquid touchscreen starting");
+  Serial.printf("BlueSquid touchscreen %s starting; reset reason=%d\n",
+                AppConfig::kFirmwareVersion, static_cast<int>(esp_reset_reason()));
   Serial.println("Display target: Waveshare ESP32-S3-Touch-LCD-7");
 
   uiPreferencesReady = uiPreferences.begin("bluesquid-ui", false);

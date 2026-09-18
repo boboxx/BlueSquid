@@ -21,7 +21,7 @@ class TouchBleAdvertisedCallbacks final
         NimBLEUUID(BlueSquidBle::kServiceUuid)) ||
         device->isAdvertisingService(NimBLEUUID(AppConfig::Ble::kServiceUuid));
     const bool nameMatch = device->haveName() &&
-        device->getName().rfind("BlueSquid", 0) == 0;
+        device->getName() == AppConfig::kBleDeviceName;
     if (serviceMatch || nameMatch) {
       owner_.foundRear(device);
     }
@@ -90,12 +90,18 @@ bool TouchBleClient::begin() {
 }
 
 void TouchBleClient::startScan() {
-  if (!initialized_ || connected()) return;
+  if (!initialized_ || connected() || connectionInProgress_.load()) return;
+  if (millis() - lastScanAttemptMs_ < BlueSquidBle::kReconnectDelayMs) return;
   NimBLEScan* scan = NimBLEDevice::getScan();
   if (!scan->isScanning()) {
     portENTER_CRITICAL(&scanMutex_);
+    if (connectRequested_ || connectionInProgress_.load()) {
+      portEXIT_CRITICAL(&scanMutex_);
+      return;
+    }
     rearAddressValid_ = false;
     portEXIT_CRITICAL(&scanMutex_);
+    lastScanAttemptMs_ = millis();
     const bool started = scan->start(BlueSquidBle::kScanDurationSeconds, nullptr, false);
     Serial.printf("BLE controller scan: %s\n", started ? "started" : "failed");
   }
@@ -104,7 +110,7 @@ void TouchBleClient::startScan() {
 void TouchBleClient::foundRear(NimBLEAdvertisedDevice* device) {
   if (device == nullptr) return;
   portENTER_CRITICAL(&scanMutex_);
-  if (connectRequested_) {
+  if (connectRequested_ || connectionInProgress_.load()) {
     portEXIT_CRITICAL(&scanMutex_);
     return;
   }
@@ -117,19 +123,49 @@ void TouchBleClient::foundRear(NimBLEAdvertisedDevice* device) {
 }
 
 void TouchBleClient::update() {
-  if (!initialized_ || connectionInProgress_.load()) return;
+  if (!initialized_) return;
   const uint32_t now = millis();
+  const bool connecting = connectionInProgress_.load();
+  if (now - lastHealthLogMs_ >= 30000) {
+    lastHealthLogMs_ = now;
+    Serial.printf("BLE health: online=%u link=%u scanning=%u reconnect=%u stage=%s snapshots=%lu age=%lu heap=%lu minHeap=%lu\n",
+        connected(), client_ && client_->isConnected(), NimBLEDevice::getScan()->isScanning(),
+        connecting, connectionStage_.load(), static_cast<unsigned long>(receivedSnapshotCount_),
+        static_cast<unsigned long>(status_.lastHeartbeatMs ? now - status_.lastHeartbeatMs : 0),
+        static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getMinFreeHeap()));
+  }
+  const auto recovery = reconnectWatchdog_.poll(now, connecting);
+  if (recovery == BleReconnectWatchdog::Action::Restart) {
+    // Never delete a blocked NimBLE task: it may still own stack-backed GATT state.
+    Serial.printf("BLE reconnect stuck at %s for 60 seconds; restarting touchscreen\n", connectionStage_.load());
+    ESP.restart();
+    return;
+  }
+  if (recovery == BleReconnectWatchdog::Action::Disconnect) {
+    Serial.printf("BLE reconnect timeout at %s; requesting disconnect\n", connectionStage_.load());
+    if (client_ && client_->isConnected()) client_->disconnect();
+  }
+  if (connecting) return;
   if (client_ != nullptr && client_->isConnected() &&
       status_.lastHeartbeatMs != 0 &&
       now - status_.lastHeartbeatMs > BlueSquidBle::kOnlineTimeoutMs) {
+    Serial.println("BLE status timed out; requesting reconnect");
     client_->disconnect();
     return;
   }
+  bool startConnection = false;
+  portENTER_CRITICAL(&scanMutex_);
   if (connectRequested_ && rearAddressValid_ &&
-      now - lastConnectAttemptMs_ >= BlueSquidBle::kReconnectDelayMs) {
+      now - lastConnectAttemptMs_.load() >= BlueSquidBle::kReconnectDelayMs) {
     connectRequested_ = false;
     lastConnectAttemptMs_ = now;
+    reconnectWatchdog_.start(now);
+    connectionStage_.store("queued");
     connectionInProgress_.store(true);
+    startConnection = true;
+  }
+  portEXIT_CRITICAL(&scanMutex_);
+  if (startConnection) {
     xSemaphoreGive(connectionWake_);
     return;
   }
@@ -182,6 +218,7 @@ void TouchBleClient::connectionTaskEntry(void* context) {
     }
     owner->lastConnectAttemptMs_ = millis();
     Serial.printf("BLE controller reconnect %s\n", success ? "complete" : "failed");
+    owner->connectionStage_.store(success ? "online" : "retry");
     owner->connectionInProgress_.store(false);
   }
 }
@@ -192,30 +229,28 @@ bool TouchBleClient::connectToRear() {
   const NimBLEAddress address = rearAddress_;
   portEXIT_CRITICAL(&scanMutex_);
   if (!valid) return false;
-  client_ = NimBLEDevice::getClientByPeerAddress(address);
-  bool refreshServices = true;
-  if (client_ == nullptr) {
-    client_ = NimBLEDevice::getDisconnectedClient();
-    refreshServices = true;
-  }
+  // Own one client/callback pair for the lifetime of the touchscreen. NimBLE
+  // setClientCallbacks replaces the pointer without deleting the previous one.
   if (client_ == nullptr) {
     client_ = NimBLEDevice::createClient();
-    refreshServices = true;
+    if (client_ == nullptr) return false;
+    client_->setClientCallbacks(new TouchBleClientCallbacks(*this), true);
   }
-  if (client_ == nullptr) return false;
-  client_->setClientCallbacks(new TouchBleClientCallbacks(*this), true);
   client_->setConnectionParams(12, 24, 0, 300);
   client_->setConnectTimeout(4);
+  connectionStage_.store("connecting");
   Serial.println("BLE controller stage: connecting");
-  if (!client_->connect(address, refreshServices)) {
+  if (!client_->connect(address, true)) {
     Serial.printf("BLE controller connect failed: %d\n", client_->getLastError());
     return false;
   }
+  connectionStage_.store("securing");
   Serial.println("BLE controller stage: securing");
   if (!client_->secureConnection()) {
     Serial.printf("BLE controller security failed: %d\n", client_->getLastError());
     return false;
   }
+  connectionStage_.store("discovering services");
   Serial.println("BLE controller stage: discovering services");
 
   NimBLERemoteService* service =
@@ -230,6 +265,7 @@ bool TouchBleClient::connectToRear() {
       ack == nullptr) {
     return false;
   }
+  connectionStage_.store("subscribing");
   Serial.println("BLE controller stage: subscribing");
   if (!snapshot->subscribe(true, snapshotNotification) ||
       !ack->subscribe(true, ackNotification)) {
@@ -247,6 +283,7 @@ bool TouchBleClient::connectToRear() {
     if (discovery != nullptr)
       discovery->subscribe(true, discoveryNotification);
   }
+  connectionStage_.store("reading initial status");
   Serial.println("BLE controller stage: reading initial status");
   const std::string initialStatus = snapshot->readValue();
   if (!client_->isConnected()) return false;

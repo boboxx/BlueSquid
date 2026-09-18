@@ -1,0 +1,57 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "BlueSquid: Monitor Controller",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}",
+        "--environment",
+        "main_controller",
+        "--filter",
+        "time",
+        "--filter",
+        "log2file"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "BlueSquid: Monitor Touchscreen",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}",
+        "--environment",
+        "touchscreen_controller",
+        "--filter",
+        "time",
+        "--filter",
+        "log2file"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

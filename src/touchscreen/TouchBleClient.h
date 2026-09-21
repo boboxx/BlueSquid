@@ -9,6 +9,7 @@
 
 #include "BlueSquidControlProtocol.h"
 #include "BleReconnectWatchdog.h"
+#include "BleDiscoveryRecovery.h"
 #include "TouchRemoteStatus.h"
 
 class NimBLEAdvertisedDevice;
@@ -67,6 +68,8 @@ class TouchBleClient {
 
   TouchRemoteStatus status_{};
   NimBLEAddress rearAddress_;
+  NimBLEAddress lastConnectedAddress_;
+  std::atomic_bool lastConnectedAddressValid_{false};
   std::atomic_bool rearAddressValid_{false};
   portMUX_TYPE scanMutex_ = portMUX_INITIALIZER_UNLOCKED;
   struct ConfigurationRequest {
@@ -92,6 +95,9 @@ class TouchBleClient {
   TaskHandle_t connectionTask_ = nullptr;
   std::atomic_bool connectionInProgress_{false};
   BleReconnectWatchdog reconnectWatchdog_;
+  BleDiscoveryRecovery discoveryRecovery_;
+  bool stableOnline_ = false;
+  uint32_t stableOnlineSince_ = 0;
   std::atomic<uint32_t> connectionProgress_{0};
   uint32_t lastHealthLogMs_ = 0;
   uint32_t lastScanAttemptMs_ = 0;

@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "BleReconnectWatchdog.h"
+#include "BleDiscoveryRecovery.h"
 int main() {
   using A = BleReconnectWatchdog::Action;
   BleReconnectWatchdog w;
@@ -39,5 +40,22 @@ int main() {
   assert(w.poll(start+30099U, true, 0) == A::None);
   assert(w.poll(start+30100U, true, 0) == A::Disconnect);
   assert(w.poll(start+60100U, true, 0) == A::Restart);
-  puts("BLE progress-aware reconnect watchdog tests passed");
+  using D = BleDiscoveryRecovery::Action;
+  BleDiscoveryRecovery d;
+  assert(d.poll(0, false, false, false, true) == D::None);
+  assert(d.poll(43200000, false, false, false, true) == D::None);
+  assert(d.poll(100, true, false, true, true) == D::None);
+  assert(d.poll(200, false, false, true, true) == D::None);
+  assert(d.poll(15199, false, false, true, true) == D::None);
+  assert(d.poll(15200, false, false, true, true) == D::RetryAddress);
+  assert(d.poll(30200, false, true, true, true) == D::None);
+  assert(d.poll(30201, false, false, true, true) == D::RetryAddress);
+  assert(d.poll(120200, false, true, true, true) == D::None);
+  assert(d.poll(120201, false, false, true, true) == D::Restart);
+  assert(d.poll(120202, false, false, true, false) == D::RetryAddress);
+  assert(d.poll(120203, false, false, true, false) == D::None);
+  assert(d.poll(130000, true, false, true, true) == D::None);
+  assert(d.poll(UINT32_MAX-100, false, false, true, true) == D::None);
+  assert(d.poll(uint32_t(UINT32_MAX-100)+15000U, false, false, true, true) == D::RetryAddress);
+  puts("BLE watchdog and discovery recovery tests passed");
 }

@@ -66,3 +66,26 @@ and timer/counter wraparound. This change corrects the premature watchdog timeou
 it does not address the separate repeated-scanning discovery failure.
 
 Backup: `archives/BlueSquid_before_progress_watchdog_20260920.tar.gz`.
+
+## Discovery recovery — touchscreen 1.0.26
+
+All three recovery measures are now present: the progress-aware reconnect watchdog,
+scan-state recovery with a direct retry, and a bounded restart fallback.
+
+After a previously connected Controller goes offline, every 15 seconds without an
+active connection job the touchscreen stops scanning, clears scan results and the
+duplicate cache, removes that disconnected peer from NimBLE's ignored-address
+list, and directly retries its last successfully connected address. Only a successful
+connection supplies this address; arbitrary scan candidates do not replace it.
+If stopping the scan fails, cache clearing and the direct connection are deferred.
+
+After two minutes offline, and only when no link or connection job is active, the
+touchscreen may restart once. The restart budget survives software resets and is
+rearmed only after a minute of continuous online operation. A fresh boot without a
+successful connection keeps scanning without discovery-triggered reboot loops.
+The remembered address is in RAM; a reboot performs normal discovery again.
+
+Tests cover first-boot offline operation, retry intervals, active-job exclusion,
+restart suppression, recovery, and timer wraparound. Physical overnight stability
+still requires verification. The Controller and existing output settings are unchanged.
+Backup: `archives/BlueSquid_before_discovery_recovery_20260920.tar.gz`.

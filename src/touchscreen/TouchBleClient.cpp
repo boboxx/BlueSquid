@@ -8,6 +8,8 @@
 namespace {
 TouchBleClient* activeClient = nullptr;
 constexpr char kTouchDeviceName[] = "BlueSquid-Touch";
+// Survives a software reset; rearmed only after a minute of healthy operation.
+RTC_DATA_ATTR bool discoveryRestartUsed = false;
 }
 
 class TouchBleAdvertisedCallbacks final
@@ -144,6 +146,46 @@ void TouchBleClient::update() {
   if (recovery == BleReconnectWatchdog::Action::Disconnect) {
     Serial.printf("BLE reconnect made no progress at %s for 30 seconds; requesting disconnect\n", connectionStage_.load());
     if (client_ && client_->isConnected()) client_->disconnect();
+  }
+  const bool online = connected();
+  if (online) {
+    if (!stableOnline_) { stableOnline_ = true; stableOnlineSince_ = now; }
+    if (now - stableOnlineSince_ >= 60000) discoveryRestartUsed = false;
+  } else stableOnline_ = false;
+  const auto discoveryAction = discoveryRecovery_.poll(now, online,
+      connecting || connectRequested_.load() || (client_ && client_->isConnected()),
+      lastConnectedAddressValid_.load(), !discoveryRestartUsed);
+  if (discoveryAction == BleDiscoveryRecovery::Action::Restart) {
+    discoveryRestartUsed = true;
+    Serial.println("BLE discovery recovery exhausted after 120 seconds; restarting touchscreen once");
+    ESP.restart();
+    return;
+  }
+  if (discoveryAction == BleDiscoveryRecovery::Action::RetryAddress) {
+    // Stop scan callbacks before clearing their result objects. Reserve the
+    // connection job before stopping: scan-complete callbacks may run here.
+    portENTER_CRITICAL(&scanMutex_);
+    connectionInProgress_.store(true);
+    connectRequested_ = false;
+    rearAddress_ = lastConnectedAddress_;
+    rearAddressValid_ = true;
+    portEXIT_CRITICAL(&scanMutex_);
+    NimBLEScan* scan = NimBLEDevice::getScan();
+    if (!scan->stop()) {
+      Serial.println("BLE discovery recovery: scan stop failed; will retry");
+      connectionInProgress_.store(false);
+      return;
+    }
+    scan->clearResults();
+    scan->clearDuplicateCache();
+    while (NimBLEDevice::isIgnored(lastConnectedAddress_))
+      NimBLEDevice::removeIgnored(lastConnectedAddress_);
+    lastConnectAttemptMs_ = now;
+    connectionStage_.store("retrying known address");
+    reconnectWatchdog_.start(now, connectionProgress_.load());
+    Serial.println("BLE discovery recovery: cleared scan state; retrying last connected Controller");
+    xSemaphoreGive(connectionWake_);
+    return;
   }
   if (connecting) return;
   if (client_ != nullptr && client_->isConnected() &&
@@ -307,6 +349,10 @@ bool TouchBleClient::connectToRear() {
   configCharacteristic_ = config;
   discoveryCharacteristic_ = discovery;
   applyConnectionParameters();
+  portENTER_CRITICAL(&scanMutex_);
+  lastConnectedAddress_ = address;
+  lastConnectedAddressValid_.store(true);
+  portEXIT_CRITICAL(&scanMutex_);
   assignmentRefreshPending_ = true;
   return true;
 }

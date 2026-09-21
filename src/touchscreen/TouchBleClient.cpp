@@ -134,15 +134,15 @@ void TouchBleClient::update() {
         static_cast<unsigned long>(status_.lastHeartbeatMs ? now - status_.lastHeartbeatMs : 0),
         static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getMinFreeHeap()));
   }
-  const auto recovery = reconnectWatchdog_.poll(now, connecting);
+  const auto recovery = reconnectWatchdog_.poll(now, connecting, connectionProgress_.load());
   if (recovery == BleReconnectWatchdog::Action::Restart) {
     // Never delete a blocked NimBLE task: it may still own stack-backed GATT state.
-    Serial.printf("BLE reconnect stuck at %s for 60 seconds; restarting touchscreen\n", connectionStage_.load());
+    Serial.printf("BLE reconnect cancellation stuck at %s for 30 seconds; restarting touchscreen\n", connectionStage_.load());
     ESP.restart();
     return;
   }
   if (recovery == BleReconnectWatchdog::Action::Disconnect) {
-    Serial.printf("BLE reconnect timeout at %s; requesting disconnect\n", connectionStage_.load());
+    Serial.printf("BLE reconnect made no progress at %s for 30 seconds; requesting disconnect\n", connectionStage_.load());
     if (client_ && client_->isConnected()) client_->disconnect();
   }
   if (connecting) return;
@@ -159,8 +159,8 @@ void TouchBleClient::update() {
       now - lastConnectAttemptMs_.load() >= BlueSquidBle::kReconnectDelayMs) {
     connectRequested_ = false;
     lastConnectAttemptMs_ = now;
-    reconnectWatchdog_.start(now);
     connectionStage_.store("queued");
+    reconnectWatchdog_.start(now, connectionProgress_.load());
     connectionInProgress_.store(true);
     startConnection = true;
   }
@@ -223,6 +223,11 @@ void TouchBleClient::connectionTaskEntry(void* context) {
   }
 }
 
+void TouchBleClient::setConnectionStage(const char* stage) {
+  connectionStage_.store(stage);
+  ++connectionProgress_;
+}
+
 bool TouchBleClient::connectToRear() {
   portENTER_CRITICAL(&scanMutex_);
   const bool valid = rearAddressValid_;
@@ -238,52 +243,58 @@ bool TouchBleClient::connectToRear() {
   }
   client_->setConnectionParams(12, 24, 0, 300);
   client_->setConnectTimeout(4);
-  connectionStage_.store("connecting");
+  setConnectionStage("connecting");
   Serial.println("BLE controller stage: connecting");
   if (!client_->connect(address, true)) {
     Serial.printf("BLE controller connect failed: %d\n", client_->getLastError());
     return false;
   }
-  connectionStage_.store("securing");
+  setConnectionStage("securing");
   Serial.println("BLE controller stage: securing");
   if (!client_->secureConnection()) {
     Serial.printf("BLE controller security failed: %d\n", client_->getLastError());
     return false;
   }
-  connectionStage_.store("discovering services");
+  setConnectionStage("discovering services");
   Serial.println("BLE controller stage: discovering services");
 
   NimBLERemoteService* service =
       client_->getService(BlueSquidBle::kServiceUuid);
   if (service == nullptr) return false;
+  setConnectionStage("discovering snapshot");
   NimBLERemoteCharacteristic* snapshot =
       service->getCharacteristic(BlueSquidBle::kSnapshotUuid);
+  if (snapshot == nullptr) return false;
+  setConnectionStage("discovering command");
   NimBLERemoteCharacteristic* command =
       service->getCharacteristic(BlueSquidBle::kCommandUuid);
+  if (command == nullptr) return false;
+  setConnectionStage("discovering acknowledgement");
   NimBLERemoteCharacteristic* ack = service->getCharacteristic(BlueSquidBle::kAckUuid);
-  if (snapshot == nullptr || command == nullptr ||
-      ack == nullptr) {
-    return false;
-  }
-  connectionStage_.store("subscribing");
+  if (ack == nullptr) return false;
+  setConnectionStage("subscribing");
   Serial.println("BLE controller stage: subscribing");
-  if (!snapshot->subscribe(true, snapshotNotification) ||
-      !ack->subscribe(true, ackNotification)) {
-    return false;
-  }
+  if (!snapshot->subscribe(true, snapshotNotification)) return false;
+  setConnectionStage("subscribing acknowledgement");
+  if (!ack->subscribe(true, ackNotification)) return false;
+  setConnectionStage("discovering configuration service");
   NimBLERemoteService* legacyService =
       client_->getService(AppConfig::Ble::kServiceUuid);
   NimBLERemoteCharacteristic* config = nullptr;
   NimBLERemoteCharacteristic* discovery = nullptr;
   if (legacyService != nullptr) {
+    setConnectionStage("discovering configuration");
     config =
         legacyService->getCharacteristic(AppConfig::Ble::kConfigUuid);
+    setConnectionStage("discovering device configuration");
     discovery = legacyService->getCharacteristic(
         AppConfig::Ble::kBmsDiscoveryUuid);
-    if (discovery != nullptr)
+    if (discovery != nullptr) {
+      setConnectionStage("subscribing configuration");
       discovery->subscribe(true, discoveryNotification);
+    }
   }
-  connectionStage_.store("reading initial status");
+  setConnectionStage("reading initial status");
   Serial.println("BLE controller stage: reading initial status");
   const std::string initialStatus = snapshot->readValue();
   if (!client_->isConnected()) return false;
@@ -577,6 +588,7 @@ void TouchBleClient::processSnapshot(const uint8_t* data, size_t length) {
   status_.settingsValid = true;
   status_.lastHeartbeatMs = millis();
   ++receivedSnapshotCount_;
+  ++connectionProgress_; // Only validated snapshots count as reconnect progress.
 }
 
 void TouchBleClient::processAck(const uint8_t* data, size_t length) {

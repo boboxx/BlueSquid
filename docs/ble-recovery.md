@@ -46,3 +46,23 @@ Each monitor writes a timestamped capture under `logs/` (excluded from Git).
 Start the two monitors at different times; PlatformIO names captures to the second.
 Opening serial ports can reset some USB-to-UART boards, so leave a capture running
 for overnight diagnosis rather than opening it only after a failure.
+
+## Progress-aware watchdog — touchscreen 1.0.25
+
+The saved overnight log showed subscription activity and fresh snapshots when the
+1.0.24 watchdog disconnected the link at 30 seconds of total connection time.
+The watchdog now measures **30 seconds without observed progress**. Successful
+setup steps and validated snapshots advance an atomic progress counter. Slow
+connections can exceed 30 or 60 seconds overall while still making progress.
+
+After an actual inactivity timeout, a disconnect is requested once. If the worker
+has not finished 30 seconds after that request, the touchscreen restarts. Late
+notifications cannot indefinitely delay this cancellation recovery. An offline
+Controller with no active reconnect job still never triggers this watchdog.
+
+Regression tests reproduce the observed delayed subscription/fresh-data sequence,
+then verify stalled progress, cancellation, completed jobs, deadline-edge progress,
+and timer/counter wraparound. This change corrects the premature watchdog timeout;
+it does not address the separate repeated-scanning discovery failure.
+
+Backup: `archives/BlueSquid_before_progress_watchdog_20260920.tar.gz`.

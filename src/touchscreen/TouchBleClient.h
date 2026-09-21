@@ -51,6 +51,7 @@ class TouchBleClient {
   void processSnapshot(const uint8_t* data, size_t length);
   void processAck(const uint8_t* data, size_t length);
   void startScan();
+  void setConnectionStage(const char* stage);
   bool queueConfiguration(const String& command, bool config);
   void applyConnectionParameters();
   bool sendValueCommand(BlueSquidControl::Command command, uint8_t target,
@@ -91,6 +92,7 @@ class TouchBleClient {
   TaskHandle_t connectionTask_ = nullptr;
   std::atomic_bool connectionInProgress_{false};
   BleReconnectWatchdog reconnectWatchdog_;
+  std::atomic<uint32_t> connectionProgress_{0};
   uint32_t lastHealthLogMs_ = 0;
   uint32_t lastScanAttemptMs_ = 0;
   std::atomic<const char*> connectionStage_{"idle"};

@@ -41,16 +41,18 @@ inline bool decode(const uint8_t* data, size_t size, Status& output) {
   if (!data || size < 53 || data[0] != 0x53 || data[1] != 0x02 ||
       data[2] != 0 ||
       size != static_cast<size_t>(data[5]) + 6) return false;
-  // RGBW, or five-channel PWM RGBCCT with only RGB and WW wired.
-  if (data[19] != 0x87 && data[19] != 0x88 && data[19] != 0x8A) return false;
+  // Three-channel PWM RGB, RGBW, or five-channel PWM RGBCCT.
+  if (data[19] != 0x85 && data[19] != 0x87 && data[19] != 0x88 && data[19] != 0x8A) return false;
   const uint8_t mode = data[32];
   if (mode < 1 || mode > 7) return false;
   Status next{};
   next.power = data[29] != 0;
   next.mode = mode;
   next.configuration = data[19];
+  const bool rgbOnly = next.configuration == 0x85;
   const bool whiteMode = mode == 2 || mode == 4 || mode == 6;
-  const bool coexist = mode <= 2 && data[24] != 0;
+  if (rgbOnly && whiteMode) return false;
+  const bool coexist = !rgbOnly && mode <= 2 && data[24] != 0;
   const bool rgb = !whiteMode || coexist;
   const bool white = whiteMode || coexist;
   next.options = (rgb ? 1 : 0) | (white ? 2 : 0);
@@ -206,6 +208,17 @@ inline WarmCommands rgbwCommands(const uint8_t channels[4], uint8_t options, boo
   if (whiteOn) {
     const uint8_t white[] = {1, static_cast<uint8_t>(channels[3] * 255U / 100U)};
     add(0x51, white, 2);
+  }
+  return result;
+}
+// PWM RGB has no white or coexistence controls.
+inline WarmCommands rgbCommands(const uint8_t channels[5]) {
+  const uint8_t rgb[4] = {channels[0], channels[1], channels[2], 0};
+  const auto combined = rgbwCommands(rgb, 1);
+  WarmCommands result{};
+  for (size_t i = 0; i < combined.count; ++i) {
+    if (combined.packets[i].data[1] != 0x0A)
+      result.packets[result.count++] = combined.packets[i];
   }
   return result;
 }

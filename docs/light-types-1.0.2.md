@@ -1,4 +1,4 @@
-# Configurable lights — firmware 1.0.2
+# Configurable lights - firmware 1.0.2
 
 Upload both `main_controller` (Controller) and `touchscreen_controller`.
 Installed devices keep their previous versions until flashed.
@@ -64,7 +64,7 @@ Single-channel and unassigned cards retain the basic on/off/brightness layout.
 Upload `touchscreen_controller` 1.0.5 for this display correction. Controller
 1.0.7 contains the separate GPIO 35 all-lights correction.
 
-## Uniform light cards — touchscreen 1.0.7
+## Uniform light cards - touchscreen 1.0.7
 
 All four light slots use the RGB card layout: title, percentage (including 0%),
 and intensity slider. Removed the PWM-only Brightness caption and normal
@@ -79,3 +79,21 @@ from preferences migrate to these names; custom labels and persistence/wire
 identifiers remain unchanged. Single-channel assignments continue to map
 intensity to their selected physical channel; full assignments use RGBW state.
 Controller remains 1.0.8; upload touchscreen_controller 1.0.7.
+
+## RGB-only assignments (Controller 1.0.17 / touchscreen 1.0.27)
+
+The SP630E light dropdown includes **Full RGB**, alongside **Full RGBCWWW**
+and the individual channels. RGB-only lights retain the colour wheel, Colour
+switch, on/off button and brightness slider. Warm White and Cool White switches
+are hidden on the touchscreen and web remote.
+
+RGB-only assignments use ID 254 and reserve the whole SP630E, like full-strip
+assignments (ID 255). Physical WW and CW commands are always zero. Group and
+scene requests for white use the RGB channels to produce white instead.
+Both firmware targets must be updated before selecting this type.
+
+Controller 1.0.18 additionally accepts SP630E hardware configuration 0x85
+(three-channel PWM RGB: white channels unused). It decodes RGB feedback and
+sends power, static-colour mode and RGB brightness commands without white or
+coexistence commands. The earlier Full RGB assignment alone did not add this
+hardware-mode support.

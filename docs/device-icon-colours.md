@@ -1,4 +1,4 @@
-# Device editor and configuration layout — touchscreen 1.0.12
+# Device editor and configuration layout - touchscreen 1.0.12
 
 Device Configuration places matching Scan and Save buttons side by side, with
 its status/description below. The light-group description is inside its card;

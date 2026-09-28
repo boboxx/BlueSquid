@@ -1,4 +1,4 @@
-# Light on/off response review — 2026-09-13
+# Light on/off response review - 2026-09-13
 
 Working baseline: archives/working-backup-20260913-082010/BlueSquid_v1-full.zip.
 Full project ZIP verified with CRC and SHA256. Includes current compiled firmware

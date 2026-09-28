@@ -1,3 +1,4 @@
+#include "PendingControl.h"
 #include "ConfigurationJson.h"
 #include "RvcFanProtocol.h"
 #include "Sp630eConfiguration.h"
@@ -59,7 +60,7 @@ constexpr uint32_t kColorGreen = 0x4DDD91;
 constexpr uint32_t kColorAmber = 0xFFBE55;
 constexpr uint32_t kColorLightbulb = 0xFFD600;
 constexpr uint32_t kColorRed = 0xFF6B70;
-constexpr uint32_t kCommandSettleTimeoutMs = 2000;
+constexpr uint32_t kCommandSettleTimeoutMs = 8000;
 constexpr int kSdMosiPin = 11;
 constexpr int kSdClockPin = 12;
 constexpr int kSdMisoPin = 13;
@@ -173,17 +174,8 @@ DeviceLabelSetting deviceLabels[kDeviceLabelCount] = {
     {"accessory_4", "i_acc4", "Accessory 4", "Accessory 4", 1, 1},
 };
 
-struct PendingState {
-  bool waiting = false;
-  bool desired = false;
-  uint32_t startedMs = 0;
-};
-
-struct PendingLevel {
-  bool waiting = false;
-  uint8_t desired = 0;
-  uint32_t startedMs = 0;
-};
+using PendingState = PendingControl<bool>;
+using PendingLevel = PendingControl<uint8_t>;
 
 lv_obj_t* victronConnectionIcons[5]{};
 lv_obj_t* connectionStatusOverlay = nullptr;
@@ -238,6 +230,7 @@ lv_obj_t* colorDialogMarker = nullptr;
 lv_obj_t* colorDialogEnableSwitch = nullptr;
 lv_obj_t* colorDialogWhiteEnableSwitch = nullptr;
 lv_obj_t* colorDialogCoolWhiteSwitch = nullptr;
+lv_obj_t* colorDialogChannelLabels[3]{};
 // Retain the saved warm/cool channel mask; White LED only toggles its power.
 uint8_t desiredWhiteTone[4]{2,2,2,2};
 lv_obj_t* colorDialogAvailabilityLabel = nullptr;
@@ -320,6 +313,7 @@ uint8_t lastZoneBrightness[4]{100, 100, 100, 100};
 bool desiredColorEnabled[4]{false, false};
 bool desiredWhiteEnabled[4]{true, true, true, true};
 bool zoneOutputEnabled[4]{false, false};
+PendingState pendingInverter{}, pendingCharger{};
 PendingState pendingOutputs[4]{};
 PendingState pendingZones[4]{};
 PendingState pendingAllLights{};
@@ -347,7 +341,11 @@ uint32_t sp630eSaveStartedMs = 0;
 bool fullLightType(uint8_t target) {
   // Empty slots may retain a default or previously saved full-strip type.
   return target < 4 && !assignedSp630eAddresses[target].isEmpty() &&
-         assignedSp630eChannels[target] == Sp630eChannels::fullStrip;
+         Sp630eChannels::colourType(assignedSp630eChannels[target]);
+}
+
+bool rgbOnlyLightType(uint8_t zone) {
+  return fullLightType(zone) && assignedSp630eChannels[zone] == Sp630eChannels::rgbOnly;
 }
 
 lv_color_t zoneColor(uint8_t zone);
@@ -505,41 +503,16 @@ void syncTabButtonLabels(lv_obj_t* tabs) {
 }
 
 void beginPending(PendingState& pending, bool desired) {
-  pending.waiting = true;
-  pending.desired = desired;
-  pending.startedMs = millis();
+  pending.begin(desired, millis());
 }
-
 bool displayState(PendingState& pending, bool remoteState) {
-  if (!pending.waiting) return remoteState;
-  if (remoteState == pending.desired) {
-    pending.waiting = false;
-    return remoteState;
-  }
-  if (millis() - pending.startedMs < kCommandSettleTimeoutMs) {
-    return pending.desired;
-  }
-  pending.waiting = false;
-  return remoteState;
+  return pending.display(remoteState, millis(), kCommandSettleTimeoutMs);
 }
-
 void beginPending(PendingLevel& pending, uint8_t desired) {
-  pending.waiting = true;
-  pending.desired = desired;
-  pending.startedMs = millis();
+  pending.begin(desired, millis());
 }
-
 uint8_t displayLevel(PendingLevel& pending, uint8_t remoteLevel) {
-  if (!pending.waiting) return remoteLevel;
-  if (remoteLevel == pending.desired) {
-    pending.waiting = false;
-    return remoteLevel;
-  }
-  if (millis() - pending.startedMs < kCommandSettleTimeoutMs) {
-    return pending.desired;
-  }
-  pending.waiting = false;
-  return remoteLevel;
+  return pending.display(remoteLevel, millis(), kCommandSettleTimeoutMs);
 }
 
 const char* chargerState(uint8_t state) {
@@ -1162,6 +1135,11 @@ void holdZoneState(uint8_t zone, bool enabled) {
 }
 
 bool sendZoneOutputs(uint8_t zone, bool enabled) {
+  if (rgbOnlyLightType(zone)) {
+    if (desiredWhiteEnabled[zone]) desiredColorEnabled[zone] = true;
+    desiredWhiteEnabled[zone] = false;
+    desiredWhiteTone[zone] = 0;
+  }
   if (!fullLightType(zone)) {
     desiredColorEnabled[zone] = false;
     desiredWhiteEnabled[zone] = enabled;
@@ -1235,7 +1213,11 @@ void colorWheelChanged(lv_event_t* event) {
 void syncWhiteSelections(uint8_t zone) {
   lv_obj_t* switches[] = {colorDialogWhiteEnableSwitch, colorDialogCoolWhiteSwitch};
   for (uint8_t i = 0; i < 2; ++i) {
-    if (desiredWhiteEnabled[zone] && (desiredWhiteTone[zone] & (2U << i)))
+    for (lv_obj_t* object : {switches[i], colorDialogChannelLabels[i + 1]}) {
+      if (rgbOnlyLightType(zone)) lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+      else lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (!rgbOnlyLightType(zone) && desiredWhiteEnabled[zone] && (desiredWhiteTone[zone] & (2U << i)))
       lv_obj_add_state(switches[i], LV_STATE_CHECKED);
     else lv_obj_remove_state(switches[i], LV_STATE_CHECKED);
   }
@@ -1392,7 +1374,7 @@ void createColorDialog() {
   const char* names[] = {"Colour", "Warm White", "Cool White"};
   lv_obj_t** switches[] = {&colorDialogEnableSwitch, &colorDialogWhiteEnableSwitch, &colorDialogCoolWhiteSwitch};
   for (uint8_t i = 0; i < 3; ++i) {
-    makeLabel(selections, names[i], 16, 57 + i * 52, &lv_font_montserrat_14, kColorText);
+    colorDialogChannelLabels[i] = makeLabel(selections, names[i], 16, 57 + i * 52, &lv_font_montserrat_14, kColorText);
     *switches[i] = lv_switch_create(selections);
     lv_obj_set_pos(*switches[i], 200, 50 + i * 52);
     lv_obj_set_size(*switches[i], 52, 28);
@@ -1428,20 +1410,16 @@ void toggleChanged(lv_event_t* event) {
   if (logicalCommand == BlueSquidControl::Command::SetInverter ||
       logicalCommand == BlueSquidControl::Command::SetCharger) {
     const auto& power = transportClient.status();
-    lv_obj_t* powerStateLabel = logicalCommand == BlueSquidControl::Command::SetInverter
-        ? (object == homeInverterButton ? homeInverterStateLabel
-                                        : inverterStateLabel)
-        : chargerStateLabel;
-    const bool previous = logicalCommand == BlueSquidControl::Command::SetInverter
-        ? power.inverterValid &&
-              (power.inverterMode == 2 || power.inverterMode == 3)
-        : power.inverterValid &&
-              (power.inverterMode == 1 || power.inverterMode == 3);
-    syncButton(object,
-               powerStateLabel,
-               sent ? desired : previous,
-               logicalCommand == BlueSquidControl::Command::SetInverter
-                   ? kColorGreen : kColorCyan);
+    const bool inverter = logicalCommand == BlueSquidControl::Command::SetInverter;
+    PendingState& pending = inverter ? pendingInverter : pendingCharger;
+    if (sent) beginPending(pending, desired);
+    const bool previous = power.inverterValid &&
+        (power.inverterMode == (inverter ? 2 : 1) || power.inverterMode == 3);
+    const bool displayed = displayState(pending, previous);
+    if (inverter) {
+      syncButton(inverterButton, inverterStateLabel, displayed, kColorGreen);
+      syncButton(homeInverterButton, homeInverterStateLabel, displayed, kColorGreen);
+    } else syncButton(chargerButton, chargerStateLabel, displayed, kColorCyan);
     return;
   }
 
@@ -1733,9 +1711,13 @@ void openSettings(lv_event_t* event) {
 
 bool sp630eSeenInScan[8]{};
 
-String sp630eScanLabel(uint8_t device) {
-  return discoveredSp630eAddresses[device] +
-      (sp630eSeenInScan[device] ? " [seen]" : " [saved]");
+String sp630eAssignmentLabel(uint8_t device, uint8_t target, uint8_t channel,
+                              const String& type) {
+  const bool saved = sp630eConfigLoaded &&
+      assignedSp630eChannels[target] == channel &&
+      assignedSp630eAddresses[target].equalsIgnoreCase(discoveredSp630eAddresses[device]);
+  return discoveredSp630eAddresses[device] + " / " + type +
+      (saved ? " [saved]" : sp630eSeenInScan[device] ? " [seen]" : "");
 }
 
 void refreshSp630eDropdowns() {
@@ -1744,9 +1726,10 @@ void refreshSp630eDropdowns() {
     if (sp630eDropdowns[target] == nullptr) continue;
     String options = "Not assigned";
     for (uint8_t device = 0; device < discoveredSp630eCount; ++device) {
-      options += "\n" + sp630eScanLabel(device) + " / Full RGBCWWW";
+      options += "\n" + sp630eAssignmentLabel(device, target, Sp630eChannels::fullStrip, "Full RGBCWWW");
+      options += "\n" + sp630eAssignmentLabel(device, target, Sp630eChannels::rgbOnly, "Full RGB");
       for (uint8_t channel = 0; channel < Sp630eChannels::count; ++channel)
-        options += "\n" + sp630eScanLabel(device) + " / Single " + channels[channel];
+        options += "\n" + sp630eAssignmentLabel(device, target, Sp630eChannels::ids[channel], String("Single ") + channels[channel]);
     }
     lv_dropdown_set_options(sp630eDropdowns[target], options.c_str());
   }
@@ -1755,8 +1738,7 @@ void refreshSp630eDropdowns() {
     String options = "Not assigned";
     for (uint8_t device = 0; device < discoveredSp630eCount; ++device) {
       for (uint8_t channel = 0; channel < Sp630eChannels::count; ++channel) {
-        options += "\n" + sp630eScanLabel(device) + " / " +
-                   channels[channel];
+        options += "\n" + sp630eAssignmentLabel(device, accessory + 4, Sp630eChannels::ids[channel], channels[channel]);
       }
     }
     lv_dropdown_set_options(accessoryChannelDropdowns[accessory],
@@ -1931,8 +1913,12 @@ void processSp630ePayload() {
                                     : accessoryChannelDropdowns[target - 4];
     if (dropdown != nullptr) lv_dropdown_set_selected(dropdown, selection);
   }
-  lv_label_set_text_fmt(sp630eStatusLabel, "%u seen in scan; %u saved, not seen",
-                        scannedCount, discoveredSp630eCount - scannedCount);
+  if (sp630eSavePending)
+    lv_label_set_text(sp630eStatusLabel, "Saving; waiting for Controller confirmation");
+  else if (sp630eDraftDirty)
+    lv_label_set_text(sp630eStatusLabel, "Unsaved changes - tap " LV_SYMBOL_OK);
+  else
+    lv_label_set_text_fmt(sp630eStatusLabel, "%u devices seen. [saved] marks confirmed assignments", scannedCount);
 }
 
 void scanSp630eClicked(lv_event_t* event) {
@@ -1967,7 +1953,7 @@ void sp630eAssignmentChanged(lv_event_t* event) {
   draftSp630eChannels[target] = channel;
   draftSp630eAddresses[target] = address;
   sp630eDraftDirty = true;
-  lv_label_set_text(sp630eStatusLabel, "Unsaved changes — tap " LV_SYMBOL_OK);
+  lv_label_set_text(sp630eStatusLabel, "Unsaved changes - tap " LV_SYMBOL_OK);
 }
 
 void lightGroupChanged(lv_event_t* event) {
@@ -1979,7 +1965,7 @@ void lightGroupChanged(lv_event_t* event) {
   for (uint8_t i = 0; i < 4; ++i)
     if (lv_obj_has_state(lightGroupChecks[i], LV_STATE_CHECKED)) draftLightGroup |= 1U << i;
   sp630eDraftDirty = true;
-  lv_label_set_text(sp630eStatusLabel, "Unsaved changes — tap " LV_SYMBOL_OK);
+  lv_label_set_text(sp630eStatusLabel, "Unsaved changes - tap " LV_SYMBOL_OK);
 }
 void saveSp630eClicked(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
@@ -2002,13 +1988,13 @@ void saveSp630eClicked(lv_event_t* event) {
             (draftSp630eAddresses[i].isEmpty() ? String("none") : draftSp630eAddresses[i]) + ";";
   Sp630eAssignment rows[8]{}; uint8_t group;
   if (!parseSp630eConfiguration(body.c_str(), rows, group)) {
-    lv_label_set_text(sp630eStatusLabel, "Conflicting assignments — check channels"); return;
+    lv_label_set_text(sp630eStatusLabel, "Conflicting assignments - check channels"); return;
   }
   if (transportClient.saveSp630eConfiguration(body)) {
     sp630eSavePending = true;
     sp630eSaveStartedMs = millis();
     lv_label_set_text(sp630eStatusLabel, "Saving; Controller will restart once");
-  } else lv_label_set_text(sp630eStatusLabel, "Controller offline — changes kept");
+  } else lv_label_set_text(sp630eStatusLabel, "Controller offline - changes kept");
 }
 
 void openBluetoothControllers(lv_event_t* event) {
@@ -2925,7 +2911,7 @@ void saveRvcFan(lv_event_t* event) {
       lv_dropdown_get_selected(rvcInstance) + 1, lv_dropdown_get_selected(rvcSource) + 151)) {
     rvcSaving = true; rvcSaveMs = millis();
     lv_label_set_text(rvcStatusLabel, "Saving configuration...");
-  } else lv_label_set_text(rvcStatusLabel, "Controller offline — configuration not sent");
+  } else lv_label_set_text(rvcStatusLabel, "Controller offline - configuration not sent");
 }
 void openRvcFan(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
@@ -3618,12 +3604,13 @@ void refreshUi() {
   setActionAvailable(inverterButton, inverterControlsAvailable);
   setActionAvailable(chargerButton, inverterControlsAvailable);
   if (inverterButton != nullptr) {
-    const bool inverterOn = status.inverterValid &&
+    if (!inverterControlsAvailable) pendingInverter = pendingCharger = {};
+    const bool inverterOn = displayState(pendingInverter, status.inverterValid &&
                             (status.inverterMode == 2 ||
-                             status.inverterMode == 3);
-    const bool chargerOn = status.inverterValid &&
+                             status.inverterMode == 3));
+    const bool chargerOn = displayState(pendingCharger, status.inverterValid &&
                            (status.inverterMode == 1 ||
-                            status.inverterMode == 3);
+                            status.inverterMode == 3));
     syncButton(inverterButton, inverterStateLabel, inverterOn, kColorGreen);
     syncButton(homeInverterButton, homeInverterStateLabel, inverterOn,
                kColorGreen);
@@ -3867,16 +3854,20 @@ String remoteStatus() {
     const uint8_t* channels=status.rgbwChannels(i);
     const bool colour=channels[0]||channels[1]||channels[2];
     JsonObject item=doc["rgb"][i].to<JsonObject>();
-    add(item,deviceLabels[kLabelRgbwLight1+i].value,colour||channels[3],status.outputAvailable(i),status.rgbwBrightness[i]);
+    add(item,deviceLabels[kLabelRgbwLight1+i].value,displayState(pendingZones[i], colour||channels[3]),status.outputAvailable(i),displayLevel(pendingBrightness[i], status.rgbwBrightness[i]));
     item["full"]=fullLightType(i);
-    item["colour"]=colour; item["white"]=channels[3]>0 && (status.rgbwOptions[i]&2);
-    item["coolWhite"]=channels[3]>0 && (status.rgbwOptions[i]&4);
+    item["rgbOnly"]=rgbOnlyLightType(i);
+    item["colour"]=displayState(pendingColorEnabled[i], colour);
+    const bool white = displayState(pendingWhiteEnabled[i], channels[3] > 0);
+    const uint8_t tone = displayLevel(pendingWhiteTone[i], status.rgbwOptions[i] & 6);
+    item["white"]=white && (tone & 2);
+    item["coolWhite"]=white && (tone & 4);
   }
   const bool states[]={status.usb,status.pump,status.accessory3,status.accessory4};
   for(uint8_t i=0;i<4;++i)
-    add(doc["outputs"][i].to<JsonObject>(),deviceLabels[kLabelAccessory1+i].value,states[i],status.outputAvailable(i+4),0);
-  add(doc["inverter"].to<JsonObject>(),"Inverter",status.inverterMode==2||status.inverterMode==3,status.inverterValid,0);
-  add(doc["charger"].to<JsonObject>(),"Shore charger",status.inverterMode==1||status.inverterMode==3,status.inverterValid,0);
+    add(doc["outputs"][i].to<JsonObject>(),deviceLabels[kLabelAccessory1+i].value,displayState(pendingOutputs[i], states[i]),status.outputAvailable(i+4),0);
+  add(doc["inverter"].to<JsonObject>(),"Inverter",displayState(pendingInverter, status.inverterMode==2||status.inverterMode==3),status.inverterValid,0);
+  add(doc["charger"].to<JsonObject>(),"Shore charger",displayState(pendingCharger, status.inverterMode==1||status.inverterMode==3),status.inverterValid,0);
   lvgl_port_unlock();
   String json;serializeJson(doc,json);return json;
 }
@@ -3893,6 +3884,7 @@ bool remoteCommand(const String& kind,uint8_t target,uint32_t value) {
         desiredWhiteTone[target]=options&6;
       } else if(kind=="rgbColour" && value<=1) desiredColorEnabled[target]=value;
       else if((kind=="rgbWhite" || kind=="rgbCoolWhite") && value<=1) {
+        if (rgbOnlyLightType(target)) return false;
         const uint8_t bit=kind=="rgbWhite" ? 2 : 4;
         desiredWhiteTone[target]=value ? desiredWhiteTone[target]|bit : desiredWhiteTone[target]&~bit;
         desiredWhiteEnabled[target]=desiredWhiteTone[target]!=0;
@@ -3915,10 +3907,15 @@ bool remoteCommand(const String& kind,uint8_t target,uint32_t value) {
     }
     if(kind=="output" && target<4 && value<=1 && status.outputAvailable(target+4)) {
       const Command commands[]={Command::SetUsb,Command::SetPump,Command::SetAccessory3,Command::SetAccessory4};
-      return transportClient.send(commands[target],0,value);
+      const bool sent = transportClient.send(commands[target],0,value);
+      if (sent) beginPending(pendingOutputs[target], value != 0);
+      return sent;
     }
-    if((kind=="inverter"||kind=="charger") && target==0 && value<=1 && status.inverterValid)
-      return transportClient.send(kind=="inverter"?Command::SetInverter:Command::SetCharger,0,value);
+    if((kind=="inverter"||kind=="charger") && target==0 && value<=1 && status.inverterValid) {
+      const bool sent = transportClient.send(kind=="inverter"?Command::SetInverter:Command::SetCharger,0,value);
+      if (sent) beginPending(kind=="inverter" ? pendingInverter : pendingCharger, value != 0);
+      return sent;
+    }
     return false;
   };
   const bool sent=perform();

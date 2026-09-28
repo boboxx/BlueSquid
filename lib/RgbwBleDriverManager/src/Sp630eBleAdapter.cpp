@@ -522,7 +522,9 @@ bool Sp630eBleAdapter::sendCommands(const RgbwBleDriverState& state) {
              state.channels[0], state.channels[1], state.channels[2], state.channels[3], state.channels[4]);
     return true;
   }
-  const auto commands = Sp630eProtocol::rgbwCommands(state.channels, state.options, state.independentChannels);
+  const auto commands = configuration == 0x85
+      ? Sp630eProtocol::rgbCommands(state.channels)
+      : Sp630eProtocol::rgbwCommands(state.channels, state.options, state.independentChannels);
   portENTER_CRITICAL(&mutex_);
   const auto changes = warmCache_.plan(commands);
   portEXIT_CRITICAL(&mutex_);

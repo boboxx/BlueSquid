@@ -5,6 +5,7 @@
 #include "Sp630eProtocol.h"
 #include "ColourWheel.h"
 #include "Sp630eChannels.h"
+#include "Sp630eConfiguration.h"
 #include "RgbwBleDriverManager.h"
 #include "TouchRemoteStatus.h"
 
@@ -724,4 +725,64 @@ void independentRelayDoesNotWakeEachTime() {
   }
 }
 
-int main() { independentRelayDoesNotWakeEachTime(); relayDoesNotRescaleDimmedGreen(); sharedRelayWakeDoesNotRestoreGreen(); wakeAppliesModeAfterPower(); offToColourStaysColour(); independentLedSelections(); offToWhiteStaysWhite(); configurableLightTypes(); coolWhiteFeedback(); whiteOnlyRetainsColour(); fullColourWheel(); separateWhiteAssignments(); singleChannelRouting(); warmWhiteIntensitySweep(); changedPacketsOnly(); continuousGesturesAreNotStarved(); protocol(); rgbWarm(); rapidChangesKeepLinkAlive(); manager(); sharedAssignments(); puts("SP630E tests passed"); }
+void rgbOnlyAssignment() {
+  Sp630eAssignment rows[8]{}; uint8_t group = 0;
+  const char* valid = "15|0,254,AA:BB:CC:DD:EE:FF;1,255,none;2,255,none;3,255,none;4,0,none;5,0,none;6,0,none;7,0,none;";
+  assert(parseSp630eConfiguration(valid, rows, group));
+  assert(rows[0].channel == Sp630eChannels::rgbOnly);
+  assert(!parseSp630eConfiguration("15|0,254,AA:BB:CC:DD:EE:FF;1,255,none;2,255,none;3,255,none;4,0,AA:BB:CC:DD:EE:FF;5,0,none;6,0,none;7,0,none;", rows, group));
+  assert(!parseSp630eConfiguration("15|0,255,none;1,255,none;2,255,none;3,255,none;4,254,AA:BB:CC:DD:EE:FF;5,0,none;6,0,none;7,0,none;", rows, group));
+  OutputController outputs; Adapter adapter; RgbwBleDriverManager manager(outputs);
+  manager.setAdapter(0, &adapter, Sp630eChannels::rgbOnly);
+  manager.begin();
+  outputs.value.rgbw[0][0] = 60;
+  outputs.value.rgbwOptions[0] = 7;
+  manager.update(); clockMs += 101; manager.update();
+  assert(adapter.sent.channels[0] == 60 && adapter.sent.channels[1] == 0);
+  assert(adapter.sent.channels[3] == 0 && adapter.sent.channels[4] == 0);
+  assert(adapter.sent.options == 1);
+  // Home/GPIO group commands request 100% white; RGB strips use RGB white.
+  outputs.value.rgbw[0][0] = 0; outputs.value.rgbw[0][3] = 100;
+  manager.update(); clockMs += 101; manager.update();
+  for (uint8_t i = 0; i < 3; ++i) assert(adapter.sent.channels[i] == 100);
+  assert(adapter.sent.channels[3] == 0 && adapter.sent.channels[4] == 0);
+  outputs.value.rgbw[0][3] = 0;
+  manager.update(); clockMs += 101; manager.update();
+  for (uint8_t level : adapter.sent.channels) assert(level == 0);
+  // White-channel feedback must not reintroduce hidden white selections.
+  RgbwBleDriverState report{};
+  report.channels[0] = 25; report.channels[3] = 80; report.channels[4] = 90;
+  report.options = 3; report.brightness = 25;
+  adapter.report(report); manager.update();
+  assert(outputs.value.rgbw[0][0] == 25 && outputs.value.rgbw[0][3] == 0);
+  assert(outputs.value.rgbwOptions[0] == 1);
+}
+void pwmRgbHardware() {
+  uint8_t packet[53]{};
+  packet[0] = 0x53; packet[1] = 2; packet[3] = 1; packet[5] = 47;
+  packet[19] = 0x85; packet[29] = 1; packet[32] = 1;
+  packet[24] = 1; // White/coexistence fields are irrelevant in PWM RGB mode.
+  packet[35] = 128; packet[36] = 255;
+  packet[37] = 255; packet[38] = 128; packet[40] = packet[41] = 255;
+  Sp630eProtocol::Status status;
+  assert(Sp630eProtocol::decode(packet, sizeof packet, status));
+  assert(status.channels[0] == 50 && status.channels[1] == 25);
+  assert(status.channels[3] == 0 && status.channels[4] == 0 && status.options == 1);
+  Sp630eProtocol::ResponseHealth health;
+  health.received(100); assert(health.available(101));
+  for (uint8_t level : {0, 1, 34, 100}) {
+    const uint8_t channels[5] = {0, level, 0, 100, 100};
+    const auto commands = Sp630eProtocol::rgbCommands(channels);
+    assert(commands.count == (level ? 3U : 1U));
+    for (size_t i = 0; i < commands.count; ++i) {
+      const uint8_t opcode = commands.packets[i].data[1];
+      assert(opcode == 0x50 || opcode == 0x53 || opcode == 0x52);
+    }
+    applyPackets(packet, commands);
+    assert(Sp630eProtocol::decode(packet, sizeof packet, status));
+    assert(status.channels[0] == 0 && status.channels[1] == level);
+    assert(status.channels[2] == 0 && status.channels[3] == 0 && status.channels[4] == 0);
+  }
+  packet[32] = 2; assert(!Sp630eProtocol::decode(packet, sizeof packet, status));
+}
+int main() { pwmRgbHardware(); rgbOnlyAssignment(); independentRelayDoesNotWakeEachTime(); relayDoesNotRescaleDimmedGreen(); sharedRelayWakeDoesNotRestoreGreen(); wakeAppliesModeAfterPower(); offToColourStaysColour(); independentLedSelections(); offToWhiteStaysWhite(); configurableLightTypes(); coolWhiteFeedback(); whiteOnlyRetainsColour(); fullColourWheel(); separateWhiteAssignments(); singleChannelRouting(); warmWhiteIntensitySweep(); changedPacketsOnly(); continuousGesturesAreNotStarved(); protocol(); rgbWarm(); rapidChangesKeepLinkAlive(); manager(); sharedAssignments(); puts("SP630E tests passed"); }

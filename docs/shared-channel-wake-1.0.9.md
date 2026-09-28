@@ -1,4 +1,4 @@
-# Shared-channel wake — Controller 1.0.9
+# Shared-channel wake - Controller 1.0.9
 
 With a relay on R and a light on G of one SP630E, the old all-off command
 powered down the peripheral without clearing its stored green level. The next
@@ -19,7 +19,7 @@ turn on the red relay. Green should stay off throughout. This addresses normal
 shutdown commanded by BlueSquid; startup with old peripheral state or changes
 made by another app still require observation on hardware.
 
-## Independent intensity — Controller 1.0.10
+## Independent intensity - Controller 1.0.10
 
 The follow-up report has G already on and dimmed while the relay on R toggles.
 The previous encoder normalized channel components against the largest active
@@ -40,7 +40,7 @@ the green component and master unchanged. SP630E and all-lights tests pass.
 Upload main_controller 1.0.10; touchscreen stays 1.0.7. Physical transient behavior
 still needs confirmation; after uploading, set G to 34%, then toggle R repeatedly.
 
-## Shared-output idle — Controller 1.0.11
+## Shared-output idle - Controller 1.0.11
 
 For independent assignments, all-off now means zero channel components with the
 SP630E still enabled, in static combined mode and fixed master brightness.

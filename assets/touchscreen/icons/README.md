@@ -6,7 +6,7 @@ touchscreen firmware.
 When editing an icon:
 
 - preserve the transparent background;
-- use white for the visible artwork—the UI applies its colour at runtime;
+- use white for the visible artwork-the UI applies its colour at runtime;
 - keep the existing canvas dimensions unless the firmware glyph dimensions
   will also be updated;
 - preserve the existing filename.

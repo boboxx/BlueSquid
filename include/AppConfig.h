@@ -13,15 +13,15 @@ namespace AppConfig {
 constexpr char kProductName[] = "BlueSquid Camper Control";
 // Independent device releases. The build selects the version for this target.
 #if defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
-constexpr char kFirmwareVersion[] = "1.0.26";
+constexpr char kFirmwareVersion[] = "1.0.30";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 26;
+constexpr uint8_t kFirmwareVersionPatch = 30;
 #else
-constexpr char kFirmwareVersion[] = "1.0.16";
+constexpr char kFirmwareVersion[] = "1.0.18";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 16;
+constexpr uint8_t kFirmwareVersionPatch = 18;
 #endif
 constexpr char kBleDeviceName[] = "BlueSquid";
 

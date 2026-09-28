@@ -1,4 +1,5 @@
 #include "RgbwBleDriverManager.h"
+#include "Sp630eChannels.h"
 
 #include <string.h>
 #include <algorithm>
@@ -102,6 +103,13 @@ RgbwBleDriverState RgbwBleDriverManager::collectFor(
     memcpy(state.color, output.rgb[zone], 3);
     state.brightness = output.rgbwBrightness[zone];
     state.options = (output.rgbwOptions[zone] & 1) | ((output.rgbwOptions[zone] & 6) ? 2 : 0);
+    if (rgbwChannels_[zone] == Sp630eChannels::rgbOnly) {
+      // Group/scene white requests use RGB white on an RGB-only strip.
+      for (uint8_t channel = 0; channel < 3; ++channel)
+        state.channels[channel] = std::max(state.channels[channel], output.rgbw[zone][3]);
+      state.channels[3] = state.channels[4] = 0;
+      state.options = (state.channels[0] || state.channels[1] || state.channels[2]) ? 1 : 0;
+    }
     return state;  // Full-strip assignment owns the physical controller.
   }
   const uint8_t accessoryLevels[4] = {
@@ -148,11 +156,12 @@ void RgbwBleDriverManager::applyReport(RgbwBleDriverAdapter* adapter,
           outputs_.setRgbwPresetField(static_cast<RgbwZone>(zone), 4, 2);
         continue;
       }
+      const bool rgbOnly = rgbwChannels_[zone] == Sp630eChannels::rgbOnly;
       // Channels first, then the preset, so OutputController's delayed
       // channel-to-preset conversion cannot overwrite the reported preset.
       for (uint8_t channel = 0; channel < 4; ++channel)
         outputs_.setRgbwChannel(static_cast<RgbwZone>(zone), channel,
-                                channel == 3 ? std::max(state.channels[3], state.channels[4]) : state.channels[channel]);
+                                channel == 3 ? (rgbOnly ? 0 : std::max(state.channels[3], state.channels[4])) : state.channels[channel]);
       const bool hasColour = state.color[0] || state.color[1] || state.color[2];
       for (uint8_t field = 0; field < 3; ++field) {
         const uint8_t selected = hasColour ? state.color[field] : outputs_.status().rgb[zone][field];
@@ -166,9 +175,9 @@ void RgbwBleDriverManager::applyReport(RgbwBleDriverAdapter* adapter,
           ? ((state.channels[0] || state.channels[1] || state.channels[2]) ? 1 : 0)
           : (state.options & 1);
       outputs_.setRgbwPresetField(static_cast<RgbwZone>(zone), 4,
-          colourOption | ((state.channels[3] || state.channels[4])
+          colourOption | (rgbOnly ? 0 : ((state.channels[3] || state.channels[4])
               ? (state.channels[3] ? 2 : 0) | (state.channels[4] ? 4 : 0)
-              : ((state.options & 2) ? ((outputs_.status().rgbwOptions[zone] & 6) ? (outputs_.status().rgbwOptions[zone] & 6) : 2) : 0)));
+              : ((state.options & 2) ? ((outputs_.status().rgbwOptions[zone] & 6) ? (outputs_.status().rgbwOptions[zone] & 6) : 2) : 0))));
       return;
     }
   }

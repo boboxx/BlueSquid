@@ -1,4 +1,4 @@
-# GPIO 35 all-lights switch — Controller 1.0.7
+# GPIO 35 all-lights switch - Controller 1.0.7
 
 The physical button previously called the two-PWM-slot control and used its
 brightness recall values. It did not include the two original RGB assignments
@@ -33,7 +33,7 @@ all-lights action and toggle decision. A regression covers one assigned RGB
 light and stale output state left in an unassigned slot, including turning the
 assigned light off through the touchscreen before pressing GPIO 35 again.
 
-## Shared Home group — Controller 1.0.8 / touchscreen 1.0.6
+## Shared Home group - Controller 1.0.8 / touchscreen 1.0.6
 
 Supersedes the separate-action behavior above: Home quick access and GPIO 35
 now invoke `setAllLightsEnabled`. BLE, CAN and bench RS-485 SetAllLights

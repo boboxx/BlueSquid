@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "Sp630eChannels.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -22,8 +23,8 @@ inline bool parseSp630eConfiguration(const char* text,
   for (unsigned i = 0; i < 8; ++i) {
     unsigned target = 0, channel = 0; char address[18]{}; used = 0;
     if (sscanf(text, "%u,%u,%17[^;];%n", &target, &channel, address, &used) != 3 ||
-        !used || target != i || (channel > 4 && channel != 255) ||
-        (i >= 4 && channel == 255 && strcmp(address, "none") != 0)) return false;
+        !used || target != i || (channel > 4 && !Sp630eChannels::colourType(channel)) ||
+        (i >= 4 && Sp630eChannels::colourType(channel) && strcmp(address, "none") != 0)) return false;
     text += used;
     parsed[i].channel = channel;
     if (strcmp(address, "none") == 0) continue;
@@ -35,7 +36,7 @@ inline bool parseSp630eConfiguration(const char* text,
     for (unsigned j = 0; j < i; ++j) {
       if (strcasecmp(parsed[j].address, address)) continue;
       known = true;
-      if (channel == 255 || parsed[j].channel == 255 || channel == parsed[j].channel) return false;
+      if (Sp630eChannels::colourType(channel) || Sp630eChannels::colourType(parsed[j].channel) || channel == parsed[j].channel) return false;
     }
     if (!known && ++devices > 5) return false;
   }

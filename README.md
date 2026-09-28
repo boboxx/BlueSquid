@@ -8,10 +8,10 @@ Victron Cerbo GX monitoring over Wi-Fi/Modbus TCP, and an RV-C roof-fan client.
 
 Photos of BlueSquid running on the Waveshare 7-inch touchscreen. Click a photo to view it full size.
 
-| Home — quick access | Light — brightness controls |
+| Home - quick access | Light - brightness controls |
 | --- | --- |
 | [![Home screen with quick-access controls](docs/images/home.jpeg)](docs/images/home.jpeg) | [![Light screen with four brightness sliders](docs/images/lights.jpeg)](docs/images/lights.jpeg) |
-| **Control — accessories and RV-C fan** | **Power — energy dashboard** |
+| **Control - accessories and RV-C fan** | **Power - energy dashboard** |
 | [![Control screen with accessory buttons and fan speed and reverse-airflow controls](docs/images/controls.jpeg)](docs/images/controls.jpeg) | [![Power screen with battery, solar, charging and load information](docs/images/power.jpeg)](docs/images/power.jpeg) |
 
 ## Build

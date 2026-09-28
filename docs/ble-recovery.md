@@ -1,4 +1,4 @@
-# Touchscreen BLE recovery — 1.0.24
+# Touchscreen BLE recovery - 1.0.24
 
 The reported overnight outage showed the Controller advertising with no connected
 clients. Both submitted logs were from the Controller port. The touchscreen serial
@@ -47,7 +47,7 @@ Start the two monitors at different times; PlatformIO names captures to the seco
 Opening serial ports can reset some USB-to-UART boards, so leave a capture running
 for overnight diagnosis rather than opening it only after a failure.
 
-## Progress-aware watchdog — touchscreen 1.0.25
+## Progress-aware watchdog - touchscreen 1.0.25
 
 The saved overnight log showed subscription activity and fresh snapshots when the
 1.0.24 watchdog disconnected the link at 30 seconds of total connection time.
@@ -67,7 +67,7 @@ it does not address the separate repeated-scanning discovery failure.
 
 Backup: `archives/BlueSquid_before_progress_watchdog_20260920.tar.gz`.
 
-## Discovery recovery — touchscreen 1.0.26
+## Discovery recovery - touchscreen 1.0.26
 
 All three recovery measures are now present: the progress-aware reconnect watchdog,
 scan-state recovery with a direct retry, and a bounded restart fallback.

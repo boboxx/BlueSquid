@@ -1,4 +1,4 @@
-# White LED switches over to colour — Controller 1.0.3
+# White LED switches over to colour - Controller 1.0.3
 
 Reported with touchscreen 1.0.3 and Controller 1.0.2: with both colour-page
 switches off, enabling White LED briefly enables white, then white turns off
@@ -36,7 +36,7 @@ These tests simulate register/status behaviour. Confirm the reported sequence
 on the physical SP630E after uploading; no new hardware capture was available
 while implementing this fix.
 
-## Follow-up — Controller and touchscreen 1.0.4
+## Follow-up - Controller and touchscreen 1.0.4
 
 The reverse problem exposed an incomplete fix: RGBCCT colour-only requests
 still enabled coexistence and wrote white registers. Both command builders
@@ -59,7 +59,7 @@ Upload both `main_controller` and `touchscreen_controller` at 1.0.4.
 Hardware verification is still required; simulated register tests do not model
 all SP630E firmware side effects.
 
-## Remaining hardware issue — diagnostic Controller 1.0.5
+## Remaining hardware issue - diagnostic Controller 1.0.5
 
 The user reports that enabling Colour LED from off still changes the switches
 over to White LED. The supplied log shows requested RGB=100,100,100 and
@@ -79,7 +79,7 @@ remains 1.0.4. Reproduce once and capture SP630E log lines from before the click
 through at least ten seconds after it. The remaining bug is not yet confirmed
 fixed; the hardware feedback capture is the next diagnostic step.
 
-## Captured failure and ordering correction — Controller 1.0.6
+## Captured failure and ordering correction - Controller 1.0.6
 
 Controller 1.0.5 capture:
 

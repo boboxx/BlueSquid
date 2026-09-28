@@ -463,7 +463,7 @@ void BleManager::setSp630eConfig(const std::string& value) {
   char address[18]{};
   if (sscanf(value.c_str() + sizeof(prefix) - 1, "%u,%u,%17s", &target,
              &channel, address) != 3 || target >= kSp630eAssignmentCount ||
-      (channel > 4 && !(target < 4 && channel == 255))) {
+      (channel > 4 && !(target < 4 && Sp630eChannels::colourType(channel)))) {
     LOG_WARN(kTag, "Rejected malformed SP630E assignment");
     return;
   }
@@ -474,7 +474,7 @@ void BleManager::setSp630eConfig(const std::string& value) {
     for (uint8_t index = 0; index < kSp630eAssignmentCount; ++index) {
       if (index == target || assignments[index].address[0] == '\0' ||
           strcasecmp(assignments[index].address, address) != 0) continue;
-      const bool fullConflict = assignments[index].channel == 255 || channel == 255;
+      const bool fullConflict = Sp630eChannels::colourType(assignments[index].channel) || Sp630eChannels::colourType(channel);
       const bool channelConflict = assignments[index].channel == channel;
       if (fullConflict || channelConflict) {
         LOG_WARN(kTag, "Rejected conflicting SP630E assignment");

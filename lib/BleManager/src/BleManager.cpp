@@ -30,7 +30,7 @@ enum class Command : uint8_t {
   ClientRole = 0x30,
   Heartbeat = 0x31,
   CalibrateLevel = 0x32,
-  BmsMonitorMode = 0x33,
+  // 0x33 is retired; do not reuse it for another command.
 };
 
 uint16_t scaledUnsigned(float value, float scale) {
@@ -266,9 +266,9 @@ class BleDiscoveryCallbacks final : public NimBLECharacteristicCallbacks {
       characteristic->notify(
           reinterpret_cast<const uint8_t*>(manager_.latestDiscoveryPayload_.c_str()),
           manager_.latestDiscoveryPayload_.length());
+    } else {
+      LOG_WARN(kTag, "Rejected unknown discovery request");
     }
-    else
-      manager_.requestJkBmsDiscovery();
   }
 
  private:
@@ -391,18 +391,6 @@ void BleManager::update() {
       discoveryCharacteristic_->notify(
           reinterpret_cast<const uint8_t*>(latestDiscoveryPayload_.c_str()),
           latestDiscoveryPayload_.length());
-  }
-  if (discoveryRequested_) {
-    discoveryRequested_ = false;
-    latestDiscoveryPayload_ = batteryManager_.discoverJkBmsDevices();
-    if (discoveryCharacteristic_ != nullptr) {
-      discoveryCharacteristic_->setValue(latestDiscoveryPayload_.c_str());
-      if (connectedClientCount_ > 0) {
-        discoveryCharacteristic_->notify(
-            reinterpret_cast<const uint8_t*>(latestDiscoveryPayload_.c_str()),
-            latestDiscoveryPayload_.length());
-      }
-    }
   }
 
   PendingCommand command;
@@ -895,15 +883,6 @@ void BleManager::setBatteryCapacityConfig(const std::string& value) {
   if (configCharacteristic_ != nullptr) configCharacteristic_->setValue(encoded);
 }
 
-void BleManager::requestJkBmsDiscovery() {
-  discoveryRequested_ = true;
-  latestDiscoveryPayload_ = "";
-  if (discoveryCharacteristic_ != nullptr) {
-    discoveryCharacteristic_->setValue("");
-  }
-  LOG_INFO(kTag, "JK BMS discovery requested");
-}
-
 void BleManager::queueCommand(uint16_t connectionHandle, uint8_t opcode,
                               uint8_t value) {
   recordClientActivity(connectionHandle);
@@ -1136,13 +1115,6 @@ void BleManager::processCommand(uint16_t connectionHandle, uint8_t opcode,
           publishStatus(latestStatus_);
         }
       }
-      return;
-    case Command::BmsMonitorMode:
-      batteryManager_.setJkBmsMonitorMode(
-          value >= 2 ? JkBmsMonitorMode::PowerPage
-                     : JkBmsMonitorMode::Off);
-      LOG_INFO(kTag, "Client %u command: BMS monitor mode = %u",
-               connectionHandle, value);
       return;
     default:
       LOG_WARN(kTag, "Rejected unknown command 0x%02X", opcode);

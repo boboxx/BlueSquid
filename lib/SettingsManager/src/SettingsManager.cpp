@@ -7,7 +7,6 @@ constexpr char kTag[] = "Settings";
 constexpr char kNamespace[] = "sensors";
 constexpr char kPitchZeroKey[] = "pitchZero";
 constexpr char kRollZeroKey[] = "rollZero";
-constexpr char kJkBmsAddressesKey[] = "jkBmsAddr";
 constexpr char kBatteryCapacityKey[] = "batteryAh";
 constexpr char kDeviceStateKey[] = "deviceState";
 constexpr char kSp630eAssignmentsKey[] = "sp630eMap";
@@ -91,26 +90,6 @@ bool SettingsManager::saveBatteryCapacityAh(float capacityAh) {
   const bool saved =
       preferences_.putFloat(kBatteryCapacityKey, capacityAh) == sizeof(float);
   LOG_INFO(kTag, "Battery capacity %.1f Ah persistence: %s", capacityAh,
-           saved ? "saved" : "failed");
-  return saved;
-}
-
-String SettingsManager::loadJkBmsAddresses(const char* defaultAddresses) {
-  if (!ready_) {
-    return String(defaultAddresses);
-  }
-  return preferences_.getString(kJkBmsAddressesKey, defaultAddresses);
-}
-
-bool SettingsManager::saveJkBmsAddresses(const String& addresses) {
-  if (!ready_) {
-    LOG_ERROR(kTag, "Cannot save JK BMS addresses: settings unavailable");
-    return false;
-  }
-
-  const size_t bytes = preferences_.putString(kJkBmsAddressesKey, addresses);
-  const bool saved = bytes == addresses.length();
-  LOG_INFO(kTag, "JK BMS address persistence: %s",
            saved ? "saved" : "failed");
   return saved;
 }

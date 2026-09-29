@@ -33,8 +33,6 @@ class SettingsManager {
                             float rollZeroDegrees);
   float loadBatteryCapacityAh(float defaultCapacityAh);
   bool saveBatteryCapacityAh(float capacityAh);
-  String loadJkBmsAddresses(const char* defaultAddresses);
-  bool saveJkBmsAddresses(const String& addresses);
   bool loadSp630eAssignments(
       Sp630eAssignment (&assignments)[kSp630eAssignmentCount]);
   bool saveSp630eAssignments(

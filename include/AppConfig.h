@@ -18,10 +18,10 @@ constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
 constexpr uint8_t kFirmwareVersionPatch = 30;
 #else
-constexpr char kFirmwareVersion[] = "1.0.18";
+constexpr char kFirmwareVersion[] = "1.0.19";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 18;
+constexpr uint8_t kFirmwareVersionPatch = 19;
 #endif
 constexpr char kBleDeviceName[] = "BlueSquid";
 
@@ -36,6 +36,7 @@ constexpr char kServiceUuid[] = "7D8B1000-8A75-4E41-9A6A-35D0A7A18B01";
 constexpr char kStatusUuid[] = "7D8B1001-8A75-4E41-9A6A-35D0A7A18B01";
 constexpr char kCommandUuid[] = "7D8B1002-8A75-4E41-9A6A-35D0A7A18B01";
 constexpr char kConfigUuid[] = "7D8B1003-8A75-4E41-9A6A-35D0A7A18B01";
+// Legacy identifier retained for compatibility; used for SP630E, RV-C and Wi-Fi configuration.
 constexpr char kBmsDiscoveryUuid[] = "7D8B1004-8A75-4E41-9A6A-35D0A7A18B01";
 constexpr uint8_t kProtocolVersion = 2;
 constexpr size_t kStatusPacketSize = 64;

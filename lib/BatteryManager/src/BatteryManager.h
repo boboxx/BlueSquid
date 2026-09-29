@@ -8,8 +8,6 @@
 #include "SettingsManager.h"
 #include "SystemTypes.h"
 
-enum class JkBmsMonitorMode : uint8_t { Off = 0, PowerPage = 2 };
-
 class BatteryManager {
  public:
   BatteryManager(EventManager& eventManager, SettingsManager& settingsManager);
@@ -25,12 +23,6 @@ class BatteryManager {
   bool setChargerEnabled(bool enabled);
   uint8_t vebusUnitId() const { return vebusUnitId_; }
   bool setVebusUnitId(uint8_t unitId);
-  // Kept temporarily so older v1 apps can connect during the protocol upgrade.
-  String jkBmsAddresses() const { return String(); }
-  bool setJkBmsAddresses(const String&) { return true; }
-  String discoverJkBmsDevices() { return String(); }
-  void setJkBmsMonitorMode(JkBmsMonitorMode) {}
-  void requestJkBmsRefresh() {}
 
  private:
   struct CerboPort;

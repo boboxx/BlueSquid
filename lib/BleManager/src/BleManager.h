@@ -60,7 +60,6 @@ class BleManager {
   friend class BleTouchSnapshotCallbacks;
 
   void setBatteryCapacityConfig(const std::string& value);
-  void requestJkBmsDiscovery();
   void requestSp630eDiscovery();
   void setSp630eConfig(const std::string& value);
   String sp630eConfig() const;
@@ -103,7 +102,6 @@ class BleManager {
   SystemStatus latestStatus_ = {};
   String latestDiscoveryPayload_;
   bool hasLatestStatus_ = false;
-  bool discoveryRequested_ = false;
   bool sp630eDiscoveryRequested_ = false;
   bool sp630eDiscoveryRunning_ = false;
   bool restartRequested_ = false;

@@ -9,6 +9,14 @@ namespace Sp630eProtocol {
 constexpr uint8_t kQuery[] = {0x53, 0x02, 0x00, 0x01, 0x00, 0x01, 0x01};
 constexpr uint32_t kPollMs = 2000;
 constexpr uint32_t kStaleMs = 8000;
+
+// Let a queued command precede a routine poll, but bound deferral during
+// continuous gestures so feedback and connection health still get serviced.
+inline bool pollDue(uint32_t now, uint32_t lastQuery, bool commandPending) {
+  return static_cast<uint32_t>(now - lastQuery) >=
+      (commandPending ? 2 * kPollMs : kPollMs);
+}
+
 struct Status {
   bool power = false;
   uint8_t mode = 0;

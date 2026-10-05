@@ -4,6 +4,7 @@
 #include "Sp630eConfiguration.h"
 #include "ColourWheel.h"
 #include "TouchHotspot.h"
+#include "FirmwareUpdate.h"
 #include "Sp630eChannels.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -249,6 +250,7 @@ lv_obj_t* controlStateLabels[4]{};
 lv_obj_t* controlTitleLabels[4]{};
 lv_obj_t* controlIconLabels[4]{};
 lv_obj_t* settingsOverlay = nullptr;
+lv_obj_t* firmwareUpdateOverlay = nullptr;
 lv_obj_t* bluetoothControllersOverlay = nullptr;
 lv_obj_t* hotspotOverlay = nullptr;
 lv_obj_t* hotspotSsid = nullptr;
@@ -1655,6 +1657,8 @@ void tabNavigationChanged(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
   lv_obj_t* tabs = static_cast<lv_obj_t*>(lv_event_get_target(event));
   if (tabs != nullptr) syncTabButtonLabels(tabs);
+  if (firmwareUpdateOverlay != nullptr)
+    lv_obj_add_flag(firmwareUpdateOverlay, LV_OBJ_FLAG_HIDDEN);
   if (settingsOverlay != nullptr) {
     lv_obj_add_flag(settingsOverlay, LV_OBJ_FLAG_HIDDEN);
   }
@@ -2950,6 +2954,27 @@ void createRvcFanOverlay() {
   lv_obj_add_event_cb(rvcSaveButton, saveRvcFan, LV_EVENT_CLICKED, nullptr);
 }
 
+void showFirmwareUpdate(lv_event_t*) {
+  if (!firmwareUpdateOverlay) firmwareUpdateOverlay = createPageOverlay("Firmware updates");
+  auto* overlay = firmwareUpdateOverlay;
+  const auto hotspot = TouchHotspot::status();
+  static auto* text = makeLabel(overlay, "", 24, 64, &lv_font_montserrat_16, kColorText);
+  lv_obj_set_width(text, 744);
+  lv_label_set_text_fmt(text,
+      "Touchscreen %s\nConnect to Wi-Fi: %s\nOpen http://%s:8080 in your browser\n"
+      "OTA login for both devices: use this Wi-Fi name and password.\n\n"
+      "Choose Controller or Touchscreen on the update page.\n"
+      "Stay connected to this hotspot for both updates.\n"
+      "Update the Controller first, then the touchscreen.\n"
+      "Cerbo readings pause during a Controller update.\n\n"
+      "Choose the matching BlueSquid .bsfw file. Keep power on.\n%s",
+      AppConfig::kFirmwareVersion, hotspot.ssid, hotspot.ip,
+      FirmwareUpdate::available() ? "" :
+      "Touchscreen OTA unavailable: install by USB first.");
+  lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(overlay);
+}
+
 void createSettingsOverlay() {
   settingsOverlay = createPageOverlay("System Configuration");
   lv_obj_add_flag(settingsOverlay, LV_OBJ_FLAG_SCROLLABLE);
@@ -3050,6 +3075,13 @@ void createSettingsOverlay() {
       "battery settings, calibration and saved output presets.",
       20, 100, &lv_font_montserrat_14, kColorMuted);
   lv_obj_set_width(backupDescription, 720);
+
+  auto* updateCard = makeCard(settingsOverlay, 16, 618, 768, 74);
+  lv_obj_add_flag(updateCard, LV_OBJ_FLAG_CLICKABLE);
+  makeLabel(updateCard, "Firmware updates", 20, 13, &lv_font_montserrat_18, kColorText);
+  makeLabel(updateCard, "Install firmware from a browser over Wi-Fi", 20, 40,
+            &lv_font_montserrat_12, kColorMuted);
+  lv_obj_add_event_cb(updateCard, showFirmwareUpdate, LV_EVENT_CLICKED, nullptr);
 
   camperPositionOverlay = createPageOverlay("Camper Position");
   makeLabel(camperPositionOverlay, "Level calibration", 18, 55,
@@ -3967,10 +3999,15 @@ void setup() {
     return;
   }
   Serial.println("LVGL initialized");
-  lvgl_port_lock(-1); buildUi(); lvgl_port_unlock();
-  Serial.println("Touchscreen UI ready");
   TouchHotspot::setRemoteHandlers(remoteStatus,remoteCommand);
   if (!TouchHotspot::begin()) Serial.println("System hotspot initialization failed");
+  FirmwareUpdate::setControllerRelay(
+      [](bool start) { return transportClient.requestControllerUpdate(start); },
+      [] { return transportClient.controllerUpdateStatus(); });
+  const auto hotspotLogin = TouchHotspot::credentials();
+  if (!FirmwareUpdate::begin(&hotspotLogin)) Serial.println("Firmware update service unavailable");
+  lvgl_port_lock(-1); buildUi(); lvgl_port_unlock();
+  Serial.println("Touchscreen UI ready");
   touchscreenReady = true;
   lastUserActivityMs = millis();
   if (!transportClient.begin()) Serial.println("Transport initialization failed");

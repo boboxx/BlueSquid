@@ -6,7 +6,9 @@ static const char kWebRemotePage[] PROGMEM = R"HTML(<!doctype html>
 body{font:17px system-ui;background:#0d1114;color:#f4f7f8;margin:0;padding:20px;max-width:650px;margin:auto}h1{font-size:26px}section{background:#20262b;border-radius:16px;padding:16px;margin:12px 0}button{padding:12px 24px;margin:6px;border:0;border-radius:10px;font:inherit;background:#35d4e8}button:disabled,input:disabled{opacity:.4}input[type=range]{width:100%;margin:20px 0}small{color:#9aa7ae}#error{color:#ffbe55;min-height:25px}label{display:block;margin:10px 0}</style>
 <h1>BlueSquid</h1><p id="connection">Connecting…</p><p id="error" role="status"></p><div id="controls"></div>
 <section><b>Power</b><p id="power">--</p></section>
+<p><a id="update" style="color:#35d4e8">Firmware updates</a></p>
 <script>
+document.querySelector("#update").href="http://"+location.hostname+":8080/";
 let token='',busy=false;
 const root=document.querySelector('#controls');
 async function command(kind,target,value){if(busy)return;busy=true;document.querySelector('#error').textContent='';try{

@@ -785,4 +785,10 @@ void pwmRgbHardware() {
   }
   packet[32] = 2; assert(!Sp630eProtocol::decode(packet, sizeof packet, status));
 }
-int main() { pwmRgbHardware(); rgbOnlyAssignment(); independentRelayDoesNotWakeEachTime(); relayDoesNotRescaleDimmedGreen(); sharedRelayWakeDoesNotRestoreGreen(); wakeAppliesModeAfterPower(); offToColourStaysColour(); independentLedSelections(); offToWhiteStaysWhite(); configurableLightTypes(); coolWhiteFeedback(); whiteOnlyRetainsColour(); fullColourWheel(); separateWhiteAssignments(); singleChannelRouting(); warmWhiteIntensitySweep(); changedPacketsOnly(); continuousGesturesAreNotStarved(); protocol(); rgbWarm(); rapidChangesKeepLinkAlive(); manager(); sharedAssignments(); puts("SP630E tests passed"); }
+int main() {
+  assert(!Sp630eProtocol::pollDue(1999, 0, false));
+  assert(Sp630eProtocol::pollDue(2000, 0, false));
+  assert(!Sp630eProtocol::pollDue(2000, 0, true));
+  assert(Sp630eProtocol::pollDue(4000, 0, true));
+  assert(Sp630eProtocol::pollDue(1999, UINT32_MAX, false));
+ pwmRgbHardware(); rgbOnlyAssignment(); independentRelayDoesNotWakeEachTime(); relayDoesNotRescaleDimmedGreen(); sharedRelayWakeDoesNotRestoreGreen(); wakeAppliesModeAfterPower(); offToColourStaysColour(); independentLedSelections(); offToWhiteStaysWhite(); configurableLightTypes(); coolWhiteFeedback(); whiteOnlyRetainsColour(); fullColourWheel(); separateWhiteAssignments(); singleChannelRouting(); warmWhiteIntensitySweep(); changedPacketsOnly(); continuousGesturesAreNotStarved(); protocol(); rgbWarm(); rapidChangesKeepLinkAlive(); manager(); sharedAssignments(); puts("SP630E tests passed"); }

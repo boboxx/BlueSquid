@@ -296,9 +296,9 @@ void Sp630eBleAdapter::taskLoop() {
     queuedMs = desiredQueuedMs_;
     pending = revision != sentRevision_ && configuration_ != 0;
     portEXIT_CRITICAL(&mutex_);
-    // Polls have priority and a quiet response window. Continuous gestures
-    // must neither starve status nor mix a status reply with a write batch.
-    if (millis() - lastQuery >= Sp630eProtocol::kPollMs) {
+    // Commands precede routine polls; the bounded deferral still services
+    // feedback during continuous gestures. Preserve the quiet reply window.
+    if (Sp630eProtocol::pollDue(millis(), lastQuery, pending)) {
       lastQuery = millis();
       portENTER_CRITICAL(&mutex_);
       acceptReport_ = desiredRevision_ == sentRevision_;

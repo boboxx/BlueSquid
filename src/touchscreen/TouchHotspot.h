@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "OtaCredentials.h"
 
 namespace TouchHotspot {
 struct Status {
@@ -15,4 +16,5 @@ bool begin();
 void update();
 bool configure(const String& ssid, const String& password);
 Status status();
+OtaCredentials::Value credentials();
 }

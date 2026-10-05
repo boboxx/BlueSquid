@@ -1,4 +1,5 @@
 #include "BleManager.h"
+#include "FirmwareUpdate.h"
 
 #include <NimBLEDevice.h>
 
@@ -234,6 +235,47 @@ class BleConfigCallbacks final : public NimBLECharacteristicCallbacks {
   BleManager& manager_;
 };
 
+class BleOtaCredentialsCallbacks final : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
+    uint8_t ack[4]{};
+    if (description && description->sec_state.encrypted)
+      OtaCredentials::writeId(ack, FirmwareUpdate::credentialsAcknowledgement());
+    characteristic->setValue(ack, sizeof(ack));
+  }
+  void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
+    if (!description || !description->sec_state.encrypted) return;
+    const std::string bytes = characteristic->getValue();
+    OtaCredentials::Value value;
+    uint32_t id = 0;
+    if (OtaCredentials::decode(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), value, id))
+      FirmwareUpdate::setHotspotCredentials(value, id);
+    // Never expose the written password as a readable characteristic value.
+    uint8_t ack[4]{};
+    OtaCredentials::writeId(ack, FirmwareUpdate::credentialsAcknowledgement());
+    characteristic->setValue(ack, sizeof(ack));
+  }
+};
+
+class BleOtaLinkCallbacks final : public NimBLECharacteristicCallbacks {
+ public:
+  explicit BleOtaLinkCallbacks(CerboWifiManager& wifi) : wifi_(wifi) {}
+  void onRead(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
+    if (!description || !description->sec_state.encrypted) return;
+    uint8_t bytes[OtaLink::kStatusSize]{};
+    OtaLink::encode(bytes, wifi_.updateNetworkStatus());
+    characteristic->setValue(bytes, sizeof(bytes));
+  }
+  void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
+    if (!description || !description->sec_state.encrypted) return;
+    const auto bytes = characteristic->getValue();
+    if (bytes.size() == 5 && static_cast<uint8_t>(bytes[0]) <= 1)
+      wifi_.requestUpdateNetwork(bytes[0] != 0, OtaCredentials::readId(
+          reinterpret_cast<const uint8_t*>(bytes.data()) + 1));
+  }
+ private:
+  CerboWifiManager& wifi_;
+};
+
 class BleDiscoveryCallbacks final : public NimBLECharacteristicCallbacks {
  public:
   explicit BleDiscoveryCallbacks(BleManager& manager) : manager_(manager) {}
@@ -334,6 +376,16 @@ bool BleManager::begin() {
   discoveryCharacteristic_->setValue("");
   discoveryCharacteristic_->setCallbacks(new BleDiscoveryCallbacks(*this));
 
+  NimBLECharacteristic* otaCredentials = service->createCharacteristic(
+      OtaCredentials::kUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
+          NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
+  otaCredentials->setCallbacks(new BleOtaCredentialsCallbacks());
+  const uint8_t emptyAck[4]{};
+  otaCredentials->setValue(emptyAck, sizeof(emptyAck));
+  auto* otaLink = service->createCharacteristic(OtaLink::kUuid,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
+      NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
+  otaLink->setCallbacks(new BleOtaLinkCallbacks(cerboWifi_));
   service->start();
 
   NimBLEService* touchService =

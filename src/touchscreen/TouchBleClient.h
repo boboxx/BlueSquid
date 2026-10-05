@@ -11,6 +11,8 @@
 #include "BleReconnectWatchdog.h"
 #include "BleDiscoveryRecovery.h"
 #include "TouchRemoteStatus.h"
+#include "OtaCredentials.h"
+#include "OtaLink.h"
 
 class NimBLEAdvertisedDevice;
 class NimBLEClient;
@@ -20,6 +22,8 @@ class TouchBleClientCallbacks;
 
 class TouchBleClient {
  public:
+  bool requestControllerUpdate(bool start);
+  OtaLink::View controllerUpdateStatus() const;
   bool begin();
   void update();
   bool send(BlueSquidControl::Command command, uint8_t target, uint16_t value);
@@ -42,6 +46,22 @@ class TouchBleClient {
   uint32_t sp630ePayloadRevision() const { return sp630ePayloadRevision_; }
 
  private:
+  void updateConnection();
+  void maintainConnection();
+  std::atomic_bool maintenanceBusy_{false};
+  void synchronizeOtaCredentials();
+  void updateControllerNetwork();
+  std::atomic<NimBLERemoteCharacteristic*> otaLinkCharacteristic_{nullptr};
+  std::atomic<uint8_t> otaLinkAction_{0};
+  bool otaLinkWanted_ = false;
+  uint32_t otaLinkId_ = 0, otaLinkPollMs_ = 0, otaLinkWriteMs_ = 0;
+  OtaLink::View otaLinkView_;
+  mutable portMUX_TYPE otaLinkMux_ = portMUX_INITIALIZER_UNLOCKED;
+  std::atomic<NimBLERemoteCharacteristic*> otaCredentialsCharacteristic_{nullptr};
+  std::atomic<uint32_t> otaConnectionRevision_{0};
+  uint32_t otaObservedRevision_ = 0;
+  uint32_t otaLastPollMs_ = 0, otaLastWriteMs_ = 0;
+  OtaCredentials::SyncState otaCredentialsSync_;
   friend class TouchBleAdvertisedCallbacks;
   friend class TouchBleClientCallbacks;
 
@@ -103,7 +123,7 @@ class TouchBleClient {
   uint32_t lastScanAttemptMs_ = 0;
   std::atomic<const char*> connectionStage_{"idle"};
   bool initialized_ = false;
-  bool displaySleeping_ = false;
+  std::atomic_bool displaySleeping_{false};
   bool assignmentRefreshPending_ = true;
   bool rgbwPending_[4]{};
   bool rgbwAwaitingAck_[4]{};

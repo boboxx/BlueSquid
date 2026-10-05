@@ -1,5 +1,6 @@
 #include "TouchHotspot.h"
 #include "WifiDefaults.h"
+#include "FirmwareUpdate.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -16,6 +17,7 @@ String token;
 QueueHandle_t requests = nullptr;
 Preferences preferences;
 Status current;
+OtaCredentials::Value currentCredentials;
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 String savedSsid, savedPassword;
 bool active = false;
@@ -25,7 +27,10 @@ void publish() {
   strlcpy(next.ip, active ? WiFi.softAPIP().toString().c_str() : "Unavailable", sizeof(next.ip));
   next.active = active;
   next.clients = active ? WiFi.softAPgetStationNum() : 0;
-  portENTER_CRITICAL(&mux); current = next; portEXIT_CRITICAL(&mux);
+  OtaCredentials::Value login;
+  strlcpy(login.username, savedSsid.c_str(), sizeof(login.username));
+  strlcpy(login.password, savedPassword.c_str(), sizeof(login.password));
+  portENTER_CRITICAL(&mux); current = next; currentCredentials = login; portEXIT_CRITICAL(&mux);
 }
 void start() {
   WiFi.mode(WIFI_AP);
@@ -89,9 +94,14 @@ void update() {
       savedSsid=ssid; savedPassword=password;
       WiFi.softAPdisconnect(false);
       start();
+      FirmwareUpdate::setHotspotCredentials(credentials());
     } else Serial.println("System hotspot: failed to save settings");
   }
   publish();
+}
+OtaCredentials::Value credentials() {
+  portENTER_CRITICAL(&mux); const auto copy = currentCredentials; portEXIT_CRITICAL(&mux);
+  return copy;
 }
 Status status() {
   portENTER_CRITICAL(&mux); const Status copy=current; portEXIT_CRITICAL(&mux);

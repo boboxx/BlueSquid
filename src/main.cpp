@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include "AppConfig.h"
+#include "FirmwareUpdate.h"
 #include "BatteryManager.h"
 #include "BleManager.h"
 #include "CerboWifiManager.h"
@@ -105,6 +106,7 @@ void setup() {
   lightSwitchManager.begin();
   sensorManager.begin();
   batteryManager.begin();
+  if (!FirmwareUpdate::begin()) LOG_WARN(kTag, "Firmware update service unavailable");
   bleManager.begin();
   configureSp630eAssignments();
   rgbwBleDriverManager.begin();

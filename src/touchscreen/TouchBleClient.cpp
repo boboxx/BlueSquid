@@ -1,4 +1,5 @@
 #include "TouchBleClient.h"
+#include "TouchHotspot.h"
 
 #include <NimBLEDevice.h>
 
@@ -124,7 +125,7 @@ void TouchBleClient::foundRear(NimBLEAdvertisedDevice* device) {
   Serial.println("BLE controller advertisement found");
 }
 
-void TouchBleClient::update() {
+void TouchBleClient::updateConnection() {
   if (!initialized_) return;
   const uint32_t now = millis();
   const bool connecting = connectionInProgress_.load();
@@ -215,6 +216,33 @@ void TouchBleClient::update() {
       now - lastConnectAttemptMs_ >= BlueSquidBle::kReconnectDelayMs) {
     startScan();
   }
+}
+
+void TouchBleClient::update() {
+  if (!initialized_) return;
+  // Never wait for background GATT work in the display/wake loop.
+  bool idle = false;
+  if (maintenanceBusy_.compare_exchange_strong(idle, true)) {
+    updateConnection();
+    maintenanceBusy_.store(false);
+  }
+  const uint32_t now = millis();
+  if (connected()) {
+    for (uint8_t zone = 0; zone < 4; ++zone) {
+      if (rgbwAwaitingAck_[zone] && now - rgbwAckStartedMs_[zone] >= 1500)
+        rgbwAwaitingAck_[zone] = false;
+      if (rgbwPending_[zone] &&
+          now - rgbwChangedMs_[zone] >=
+              BlueSquidBle::kInteractiveCoalesceMs) {
+        sendRgbwState(zone);
+      }
+    }
+  }
+}
+
+void TouchBleClient::maintainConnection() {
+  synchronizeOtaCredentials();
+  updateControllerNetwork();
   if (assignmentRefreshPending_ && requestSp630eConfiguration())
     assignmentRefreshPending_ = false;
   // Configuration requests originate in LVGL callbacks. Never wait for a
@@ -233,17 +261,6 @@ void TouchBleClient::update() {
       Serial.printf("BLE configuration write: %s\n", sent ? "acknowledged" : "failed");
     }
   }
-  if (connected()) {
-    for (uint8_t zone = 0; zone < 4; ++zone) {
-      if (rgbwAwaitingAck_[zone] && now - rgbwAckStartedMs_[zone] >= 1500)
-        rgbwAwaitingAck_[zone] = false;
-      if (rgbwPending_[zone] &&
-          now - rgbwChangedMs_[zone] >=
-              BlueSquidBle::kInteractiveCoalesceMs) {
-        sendRgbwState(zone);
-      }
-    }
-  }
 }
 
 void TouchBleClient::connectionTaskEntry(void* context) {
@@ -251,7 +268,17 @@ void TouchBleClient::connectionTaskEntry(void* context) {
   for (;;) {
     // NimBLE owns task notifications while synchronous GATT calls wait.
     // Use a separate semaphore for jobs so BLE completions cannot start one.
-    xSemaphoreTake(owner->connectionWake_, portMAX_DELAY);
+    if (xSemaphoreTake(owner->connectionWake_, pdMS_TO_TICKS(20)) != pdTRUE) {
+      bool idle = false;
+      if (owner->maintenanceBusy_.compare_exchange_strong(idle, true)) {
+        // The same reservation guards reconnect scheduling in update(). A
+        // reconnect cannot delete cached characteristics during a GATT read.
+        if (!owner->connectionInProgress_.load() && owner->connected())
+          owner->maintainConnection();
+        owner->maintenanceBusy_.store(false);
+      }
+      continue;
+    }
     Serial.println("BLE controller reconnect started");
     const bool success = owner->connectToRear();
     if (!success) {
@@ -324,6 +351,8 @@ bool TouchBleClient::connectToRear() {
       client_->getService(AppConfig::Ble::kServiceUuid);
   NimBLERemoteCharacteristic* config = nullptr;
   NimBLERemoteCharacteristic* discovery = nullptr;
+  NimBLERemoteCharacteristic* otaCredentials = nullptr;
+  NimBLERemoteCharacteristic* otaLink = nullptr;
   if (legacyService != nullptr) {
     setConnectionStage("discovering configuration");
     config =
@@ -331,6 +360,10 @@ bool TouchBleClient::connectToRear() {
     setConnectionStage("discovering device configuration");
     discovery = legacyService->getCharacteristic(
         AppConfig::Ble::kBmsDiscoveryUuid);
+    setConnectionStage("discovering OTA credentials");
+    otaCredentials = legacyService->getCharacteristic(OtaCredentials::kUuid);
+    setConnectionStage("discovering OTA network link");
+    otaLink = legacyService->getCharacteristic(OtaLink::kUuid);
     if (discovery != nullptr) {
       setConnectionStage("subscribing configuration");
       discovery->subscribe(true, discoveryNotification);
@@ -348,6 +381,10 @@ bool TouchBleClient::connectToRear() {
   ackCharacteristic_ = ack;
   configCharacteristic_ = config;
   discoveryCharacteristic_ = discovery;
+  otaCredentialsCharacteristic_.store(otaCredentials);
+  otaLinkCharacteristic_.store(otaLink);
+  otaConnectionRevision_.fetch_add(1);
+  otaLinkPollMs_ = millis() - 30000;
   applyConnectionParameters();
   portENTER_CRITICAL(&scanMutex_);
   lastConnectedAddress_ = address;
@@ -364,6 +401,11 @@ void TouchBleClient::disconnected() {
   ackCharacteristic_ = nullptr;
   configCharacteristic_ = nullptr;
   discoveryCharacteristic_ = nullptr;
+  otaCredentialsCharacteristic_.store(nullptr);
+  otaLinkCharacteristic_.store(nullptr);
+  portENTER_CRITICAL(&otaLinkMux_);
+  otaLinkView_.connected = otaLinkView_.ready = false;
+  portEXIT_CRITICAL(&otaLinkMux_);
   connectRequested_ = false;
   status_.lastHeartbeatMs = 0;
   if (configurationQueue_) xQueueReset(configurationQueue_);
@@ -372,6 +414,108 @@ void TouchBleClient::disconnected() {
     rgbwAwaitingAck_[zone] = false;
   }
   lastConnectAttemptMs_ = millis();
+}
+
+void TouchBleClient::synchronizeOtaCredentials() {
+  auto* characteristic = otaCredentialsCharacteristic_.load();
+  if (!connected() || !characteristic) return;
+  const uint32_t revision = otaConnectionRevision_.load();
+  if (revision != otaObservedRevision_) {
+    otaObservedRevision_ = revision;
+    otaCredentialsSync_.reset();
+    otaLastPollMs_ = millis() - 1000;
+  }
+  const uint32_t now = millis();
+  if (uint32_t(now - otaLastPollMs_) < 1000) return;
+  otaLastPollMs_ = now;
+  const auto desired = TouchHotspot::credentials();
+  if (!OtaCredentials::valid(desired)) return;
+  if (otaCredentialsSync_.current(desired)) return;
+  if (otaCredentialsSync_.needsRequest(desired)) {
+    otaCredentialsSync_.begin(desired, esp_random() | 1U);
+    otaLastWriteMs_ = now - 3000;
+  } else {
+    const std::string ack = characteristic->readValue();
+    if (ack.size() == 4 && otaCredentialsSync_.acknowledge(OtaCredentials::readId(
+        reinterpret_cast<const uint8_t*>(ack.data())))) {
+      Serial.println("Controller OTA login synchronized with System hotspot");
+      return;
+    }
+  }
+  if (!connected() || otaCredentialsCharacteristic_.load() != characteristic ||
+      uint32_t(now - otaLastWriteMs_) < 3000) return;
+  uint8_t bytes[OtaCredentials::kWireSize]{};
+  OtaCredentials::encode(bytes, otaCredentialsSync_.requested, otaCredentialsSync_.id);
+  otaLastWriteMs_ = now;
+  characteristic->writeValue(bytes, sizeof(bytes), true);
+}
+
+bool TouchBleClient::requestControllerUpdate(bool start) {
+  const auto view = controllerUpdateStatus();
+  if (start && (!view.connected || !view.supported)) return false;
+  portENTER_CRITICAL(&otaLinkMux_);
+  otaLinkView_.ready = false;
+  if (start) otaLinkView_.status.phase = OtaLink::Phase::Joining;
+  portEXIT_CRITICAL(&otaLinkMux_);
+  otaLinkAction_.store(start ? 1 : 2);
+  return true;
+}
+OtaLink::View TouchBleClient::controllerUpdateStatus() const {
+  portENTER_CRITICAL(&otaLinkMux_); auto copy = otaLinkView_; portEXIT_CRITICAL(&otaLinkMux_);
+  if (otaLinkAction_.load()) copy.ready = false;
+  return copy;
+}
+void TouchBleClient::updateControllerNetwork() {
+  const uint8_t action = otaLinkAction_.exchange(0);
+  if (action) {
+    portENTER_CRITICAL(&otaLinkMux_); otaLinkView_.ready = false; portEXIT_CRITICAL(&otaLinkMux_);
+    otaLinkWanted_ = action == 1;
+    if (otaLinkWanted_) otaLinkId_ = esp_random() | 1U;
+    otaLinkPollMs_ = millis() - 1000;
+    otaLinkWriteMs_ = millis() - 3000;
+  }
+  auto* characteristic = otaLinkCharacteristic_.load();
+  const uint32_t now = millis();
+  const auto previous = controllerUpdateStatus();
+  const bool active = otaLinkWanted_ ||
+      previous.status.phase == OtaLink::Phase::Joining ||
+      previous.status.phase == OtaLink::Phase::Ready;
+  const uint32_t pollInterval = active ? 1000 : 30000;
+  if (!action && uint32_t(now - otaLinkPollMs_) < pollInterval) return;
+  otaLinkPollMs_ = now;
+  OtaLink::View view = controllerUpdateStatus();
+  view.connected = connected();
+  view.supported = characteristic != nullptr;
+  view.ready = false;
+  if (view.connected && characteristic) {
+    const auto bytes = characteristic->readValue();
+    OtaLink::Status status;
+    const bool received = OtaLink::decode(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), status);
+    if (received) view.status = status;
+    const bool loginSynced = otaCredentialsSync_.current(TouchHotspot::credentials());
+    bool send = false;
+    if (otaLinkWanted_ && loginSynced) {
+      send = !received || status.id != otaLinkId_;
+      view.ready = received && status.id == otaLinkId_ && status.phase == OtaLink::Phase::Ready;
+      if (send) view.status.phase = OtaLink::Phase::Joining;
+    } else if (!otaLinkWanted_ && received) {
+      // Also clean up an orphaned session after a touchscreen reboot.
+      if (status.phase == OtaLink::Phase::Joining || status.phase == OtaLink::Phase::Ready) {
+        otaLinkId_ = status.id; send = true;
+      } else otaLinkId_ = 0;
+    } else if (otaLinkWanted_) view.status.phase = OtaLink::Phase::Joining;
+    if (send && connected() && otaLinkCharacteristic_.load() == characteristic &&
+        uint32_t(now - otaLinkWriteMs_) >= 3000) {
+      uint8_t request[5]{};
+      request[0] = otaLinkWanted_ ? 1 : 0;
+      OtaCredentials::writeId(request + 1, otaLinkId_);
+      otaLinkWriteMs_ = now;
+      characteristic->writeValue(request, sizeof(request), true);
+    }
+  }
+  view.connected = connected();
+  view.ready = view.ready && view.connected;
+  portENTER_CRITICAL(&otaLinkMux_); otaLinkView_ = view; portEXIT_CRITICAL(&otaLinkMux_);
 }
 
 bool TouchBleClient::requestSp630eDiscovery() {

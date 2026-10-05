@@ -48,6 +48,12 @@ flashing and 115200-baud startup logs. A successful boot prints `Display hardwar
 initialized`, `LVGL initialized`, and `Touchscreen UI ready`. This target is only
 for a board labelled `ESP32-S3-Touch-LCD-7`.
 
+## Firmware updates
+
+Connect to the touchscreen hotspot and update either device from its browser
+page after a one-time USB installation on both. See [OTA setup and recovery](docs/ota-updates.md)
+for login details and the generated `.bsfw` packages.
+
 ## Features
 
 - Four RGBW light controls with SP630E full-device or individual-channel assignments.

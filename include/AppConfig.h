@@ -13,15 +13,15 @@ namespace AppConfig {
 constexpr char kProductName[] = "BlueSquid Camper Control";
 // Independent device releases. The build selects the version for this target.
 #if defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
-constexpr char kFirmwareVersion[] = "1.0.34";
+constexpr char kFirmwareVersion[] = "1.0.40";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 34;
+constexpr uint8_t kFirmwareVersionPatch = 40;
 #else
-constexpr char kFirmwareVersion[] = "1.0.23";
+constexpr char kFirmwareVersion[] = "1.0.29";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 23;
+constexpr uint8_t kFirmwareVersionPatch = 29;
 #endif
 constexpr char kBleDeviceName[] = "BlueSquid";
 
@@ -94,7 +94,7 @@ constexpr float kGy61XZeroMv = 1650.0F;
 constexpr float kGy61YZeroMv = 1650.0F;
 constexpr float kGy61ZZeroMv = 1650.0F;
 constexpr float kGy61SensitivityMvPerG = 330.0F;
-constexpr float kAttitudeFilterAlpha = 0.30F;
+constexpr float kAttitudeFilterAlpha = 0.10F;
 constexpr bool kInvertPitch = false;
 constexpr bool kInvertRoll = false;
 }  // namespace Sensors

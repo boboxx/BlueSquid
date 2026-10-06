@@ -89,3 +89,100 @@ Tests cover first-boot offline operation, retry intervals, active-job exclusion,
 restart suppression, recovery, and timer wraparound. Physical overnight stability
 still requires verification. The Controller and existing output settings are unchanged.
 Backup: `archives/BlueSquid_before_discovery_recovery_20260920.tar.gz`.
+
+## Sleep-related link loss - touchscreen 1.0.37
+
+The October 6 capture contains five Controller-link disconnects. Three occur
+4–5 seconds after `Display asleep`. Reconnection takes about 40–110 seconds;
+status notifications resume before all GATT setup completes, but the UI correctly
+keeps controls offline until setup is complete. Snapshot counters continue
+increasing throughout this capture. There is no boot banner, panic, or explicit
+restart message in it, so it cannot establish the reported reboot cause.
+
+Previously, screen sleep requested a 100–200 ms BLE interval and a four-second
+supervision timeout. The on-connect callback also requested that slower interval
+before service discovery when the display was sleeping. Version 1.0.37 removes
+sleep/wake BLE renegotiation and keeps the initial 15–30 ms requested interval
+through setup and normal operation. Display sleep still switches off the backlight;
+it no longer changes radio timing. This may use more radio power while sleeping.
+
+A GAP event listener now records the actual disconnect reason and the negotiated
+interval, latency and supervision timeout. It does not use `getLastError()` as a
+disconnect reason, because that API reports the last client operation error.
+Existing watchdog and discovery recovery remain in place.
+
+Recovery and display tests plus the touchscreen build are checked. Repeated
+sleep/wake cycles and an overnight capture on the installed hardware are still
+needed to validate the mitigation. Controller logs at matching times and the
+actual touchscreen startup/crash output are needed if a reboot recurs.
+
+## Confirmed recovery restart - touchscreen 1.0.38
+
+The extended October 6 log confirms a deliberate recovery restart at 08:58:54:
+`BLE discovery recovery exhausted after 120 seconds; restarting touchscreen once`,
+followed by `RTC_SW_CPU_RST` and the 1.0.36 boot banner. No panic or brownout is
+shown. The Controller connection had completed at 08:58:30, before another
+sleep-related disconnect at 08:58:54. Startup then reconnects successfully.
+
+Discovery recovery previously cleared its outage timer only when main-task
+polling observed `online=true`. Background GATT maintenance reserves the same
+connection state and can defer that polling across an entire brief reconnection.
+Consequently, a subsequent disconnect can inherit an already-expired outage.
+
+Successful connection completion now atomically latches a recovery event from
+the worker. The main-task recovery policy consumes it before evaluating timeout,
+even if the link is already offline again. A fresh outage gets its own timer;
+the bounded restart fallback and restart budget remain intact. The regression
+test covers recovery missed by main polling followed by a new disconnect.
+
+Version 1.0.38 also includes the unflashed 1.0.37 sleep-timing mitigation. Only
+`touchscreen_controller` needs uploading. Repeated sleep/wake and overnight
+hardware verification remain required.
+
+## Controller radio activity capacity (1.0.26)
+
+The ESP32-S3 Arduino SDK initializes six radio activities independently of
+NimBLE's six host connection slots. `BleRadioCapacity.cpp` wraps controller
+initialization to request the SDK-supported maximum (ten activities), leaving
+room for connections and discovery/advertising. The main_controller linker
+flag enables this wrapper; no framework or dependency files are patched.
+Startup logs both the previous/new activity budget and the host slot count.
+
+Commissioning exposed HCI error 519 (0x207, memory capacity exceeded) when
+adding a third SP630E alongside the touchscreen. Unplugging a working SP630E
+allowed the new unit to connect, but that unit still returned no notifications
+after acknowledged status queries. Capacity and missing status replies must
+be verified separately; successful GATT writes do not make an output available.
+
+With all three modules powered again, 1.0.26 allowed the third module to
+reconnect repeatedly while the other two and touchscreen remained connected;
+error 519 did not recur during the observed test.
+
+Controller 1.0.27 adds one read-only status query without GATT response per
+silent connection, after normal queries and subscription recovery. It does not
+change output commands or availability deadlines. Live testing of module
+25:79 still showed zero notifications despite the probe being queued. This is
+a diagnostic fallback, not a confirmed fix for that module's missing replies.
+
+Controller 1.0.28 enumerates service UUIDs and characteristic capabilities once
+per module per boot, before retaining command pointers. The live comparison
+found identical GATT layouts on the new 25:79 and working 26:fa modules:
+FFE0 / FFE1 at value handle 20 (write, write-without-response, notify), and
+CCCD handle 21 enabled as 01 00. Both also expose the same 5833ff01 service
+with ff02 write and ff03 notify characteristics. No alternate lighting status
+endpoint was established by this comparison. The new module remains silent;
+further protocol changes need evidence from manufacturer-app traffic.
+
+## Extended status notification MTU (Controller 1.0.29)
+
+An isolated macOS CoreBluetooth query to replacement module 45:5a returned
+three valid 186-byte status replies (payload length 0xB4 plus six-byte header).
+The previous requested ATT MTU of 185 allowed only 182 notification bytes.
+On the ESP32 these modules sent no notifications rather than a short packet.
+The Controller now requests MTU 247 using Sp630eProtocol::kPreferredMtu.
+The regression test checks extended framing, rejection of a truncated reply,
+and sufficient notification capacity. Live testing confirmed MTU 247 and valid
+status from all three modules, including 45:5a. The original 25:79 still needs
+retesting with this firmware. The replacement reports configuration 0x85 (RGB)
+and firmware 4.0.26 in its captured reply; RGBCCT requires configuration in the
+manufacturer app appropriate to the attached strip.

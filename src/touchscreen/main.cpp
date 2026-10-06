@@ -4,6 +4,8 @@
 #include "Sp630eConfiguration.h"
 #include "ColourWheel.h"
 #include "TouchHotspot.h"
+#include "TouchClock.h"
+#include "DisplaySchedule.h"
 #include "FirmwareUpdate.h"
 #include "Sp630eChannels.h"
 #include <Arduino.h>
@@ -139,6 +141,8 @@ constexpr DeviceIconOption kDeviceIcons[] = {
     {"charge", "Charging", LV_SYMBOL_CHARGE},
     {"bell", "Alert", LV_SYMBOL_BELL},
     {"settings", "Settings", LV_SYMBOL_SETTINGS},
+    {"spigot", "Spigot", BLUESQUID_SYMBOL_SPIGOT},
+    {"flames", "Flames", BLUESQUID_SYMBOL_FLAMES},
 };
 constexpr uint8_t kDeviceIconCount =
     sizeof(kDeviceIcons) / sizeof(kDeviceIcons[0]);
@@ -285,6 +289,19 @@ lv_obj_t* settingsRollLabel = nullptr;
 lv_obj_t* calibrationStatusLabel = nullptr;
 lv_obj_t* settingsExportStatusLabel = nullptr;
 lv_obj_t* sleepTimeoutDropdown = nullptr;
+lv_obj_t* displayDimmer = nullptr;
+lv_obj_t* displayBrightnessValue = nullptr;
+lv_obj_t* overnightBrightnessValue = nullptr;
+lv_obj_t* clockStatusLabel = nullptr;
+lv_obj_t* clockHourDropdown = nullptr;
+lv_obj_t* clockMinuteDropdown = nullptr;
+uint8_t displayBrightness = 100, overnightBrightness = 20;
+bool overnightEnabled = false;
+uint16_t overnightOff = 22 * 60, overnightOn = 7 * 60;
+constexpr uint16_t kNightWakeSeconds[] = {15, 30, 60, 120, 300};
+uint8_t overnightWakeChoice = 1;
+DisplaySchedule::State displaySchedule;
+
 lv_obj_t* labelConfigOverlay = nullptr;
 lv_obj_t* labelEditorOverlay = nullptr;
 lv_obj_t* labelEditorTitle = nullptr;
@@ -646,14 +663,39 @@ void applyDeviceLabels() {
   applyDeviceDisplayLayout();
 }
 
+bool overnightNow() {
+  const auto clock = TouchClock::read();
+  return DisplaySchedule::overnight(overnightEnabled, clock.valid, clock.minute,
+                                    overnightOff, overnightOn);
+}
+void applyDisplayBrightness() {
+  if (!displayDimmer) return;
+  const unsigned value = overnightNow() ? overnightBrightness : displayBrightness;
+  static unsigned previous = 101;
+  if (value != previous) {
+    lv_obj_set_style_bg_opa(displayDimmer, (100 - value) * 255 / 100, 0);
+    previous = value;
+  }
+}
+void saveDisplaySettings() {
+  if (!uiPreferencesReady) return;
+  uiPreferences.putUChar("disp_level", displayBrightness);
+  uiPreferences.putUChar("night_level", overnightBrightness);
+  uiPreferences.putBool("night_enabled", overnightEnabled);
+  uiPreferences.putUShort("night_off", overnightOff);
+  uiPreferences.putUShort("night_on", overnightOn);
+  uiPreferences.putUChar("night_wake", overnightWakeChoice);
+}
+
+
 void wakeDisplay() {
   if (!displaySleeping || panel == nullptr || panel->getBacklight() == nullptr) {
     return;
   }
+  applyDisplayBrightness();
   if (panel->getBacklight()->on()) {
     displaySleeping = false;
     lvgl_port_set_display_sleeping(false);
-    transportClient.setDisplaySleeping(false);
     lastUserActivityMs = millis();
     Serial.println("Display awake");
   } else {
@@ -670,7 +712,6 @@ void sleepDisplay() {
   lvgl_port_set_display_sleeping(true);
   if (panel->getBacklight()->off()) {
     displaySleeping = true;
-    transportClient.setDisplaySleeping(true);
     Serial.println("Display asleep; touch screen to wake");
   } else {
     lvgl_port_set_display_sleeping(false);
@@ -763,9 +804,9 @@ void addHeader(lv_obj_t* page, const char* title, int connectionIndex) {
       makeLabel(page,
                 "P --.-°  R --.-°  |  "
                 BLUESQUID_SYMBOL_THERMOMETER " --.-°C  |  "
-                BLUESQUID_SYMBOL_HUMIDITY " --%  |",
-                225, 7, &climateFont16, kColorMuted);
-  lv_obj_set_size(headerClimateLabels[connectionIndex], 465, 30);
+                BLUESQUID_SYMBOL_HUMIDITY " --%  |  --:--",
+                207, 7, &climateFont16, kColorMuted);
+  lv_obj_set_size(headerClimateLabels[connectionIndex], 500, 30);
   lv_obj_set_style_text_align(headerClimateLabels[connectionIndex],
                               LV_TEXT_ALIGN_RIGHT, 0);
   victronConnectionIcons[connectionIndex] =
@@ -2962,7 +3003,7 @@ void showFirmwareUpdate(lv_event_t*) {
   lv_obj_set_width(text, 744);
   lv_label_set_text_fmt(text,
       "Touchscreen %s\nConnect to Wi-Fi: %s\nOpen http://%s:8080 in your browser\n"
-      "OTA login for both devices: use this Wi-Fi name and password.\n\n"
+      "No separate login is needed on the firmware update page.\n\n"
       "Choose Controller or Touchscreen on the update page.\n"
       "Stay connected to this hotspot for both updates.\n"
       "Update the Controller first, then the touchscreen.\n"
@@ -3125,38 +3166,103 @@ void createSettingsOverlay() {
   lv_obj_set_width(calibrationStatusLabel, 350);
 
   displaySettingsOverlay = createPageOverlay("Display");
-  makeLabel(displaySettingsOverlay, "Screen sleep", 18, 55,
-            &lv_font_montserrat_16, kColorText);
-  lv_obj_t* displayCard =
-      makeCard(displaySettingsOverlay, 16, 82, 768, 160);
-  makeIconCircle(displayCard, 20, 24, 52, LV_SYMBOL_EYE_OPEN,
-                 &lv_font_montserrat_24, kColorCyan);
-  makeLabel(displayCard, "Turn the screen off after", 92, 24,
-            &lv_font_montserrat_14, kColorMuted);
-  sleepTimeoutDropdown = lv_dropdown_create(displayCard);
-  lv_dropdown_set_options(sleepTimeoutDropdown, kSleepTimeoutOptions);
-  lv_dropdown_set_selected(
-      sleepTimeoutDropdown, sleepTimeoutChoiceIndex(sleepTimeoutMinutes));
-  lv_obj_set_pos(sleepTimeoutDropdown, 92, 51);
-  lv_obj_set_size(sleepTimeoutDropdown, 285, 50);
-  lv_obj_set_style_bg_color(sleepTimeoutDropdown,
-                            lv_color_hex(kColorSurface), 0);
-  lv_obj_set_style_border_color(sleepTimeoutDropdown,
-                                lv_color_hex(kColorBorder), 0);
-  lv_obj_set_style_border_width(sleepTimeoutDropdown, 1, 0);
-  lv_obj_set_style_radius(sleepTimeoutDropdown, 14, 0);
-  lv_obj_set_style_text_color(sleepTimeoutDropdown,
-                              lv_color_hex(kColorText), 0);
-  lv_obj_set_style_text_font(sleepTimeoutDropdown,
-                             &lv_font_montserrat_16, 0);
-  lv_obj_add_event_cb(sleepTimeoutDropdown, sleepTimeoutChanged,
-                      LV_EVENT_VALUE_CHANGED, nullptr);
-  lv_obj_t* sleepDescription = makeLabel(
-      displayCard,
-      "Touch the screen to wake it. Use the moon in the header to sleep "
-      "immediately.",
-      410, 41, &lv_font_montserrat_14, kColorMuted);
-  lv_obj_set_width(sleepDescription, 325);
+  lv_obj_add_flag(displaySettingsOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(displaySettingsOverlay, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(displaySettingsOverlay, LV_SCROLLBAR_MODE_AUTO);
+  auto dropdown = [](lv_obj_t* parent, const char* options, int x, int y, int width,
+                     unsigned selected, lv_event_cb_t callback) {
+    auto* control = lv_dropdown_create(parent);
+    lv_dropdown_set_options(control, options); lv_dropdown_set_selected(control, selected);
+    lv_obj_set_pos(control, x, y); lv_obj_set_size(control, width, 42);
+    lv_obj_set_style_bg_color(control, lv_color_hex(kColorSurface), 0);
+    lv_obj_set_style_text_color(control, lv_color_hex(kColorText), 0);
+    lv_obj_set_style_text_font(control, &lv_font_montserrat_16, 0);
+    if (callback) lv_obj_add_event_cb(control, callback, LV_EVENT_VALUE_CHANGED, nullptr);
+    return control;
+  };
+  auto slider = [](lv_obj_t* parent, int x, int y, int width, int value, lv_event_cb_t callback) {
+    auto* control = lv_slider_create(parent); lv_obj_set_pos(control, x, y);
+    lv_obj_set_size(control, width, 12); lv_slider_set_range(control, 5, 100);
+    lv_slider_set_value(control, value, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(control, lv_color_hex(kColorCyan), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(control, lv_color_hex(kColorCyan), LV_PART_KNOB);
+    lv_obj_add_event_cb(control, callback, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(control, [](lv_event_t*) { saveDisplaySettings(); }, LV_EVENT_RELEASED, nullptr);
+  };
+  auto* displayCard = makeCard(displaySettingsOverlay, 16, 55, 376, 130);
+  makeLabel(displayCard, LV_SYMBOL_EYE_OPEN "  Display", 16, 12, &lv_font_montserrat_20, kColorText);
+  makeLabel(displayCard, "Brightness", 16, 53, &lv_font_montserrat_14, kColorMuted);
+  displayBrightnessValue = makeLabel(displayCard, "", 303, 49, &lv_font_montserrat_16, kColorText);
+  lv_label_set_text_fmt(displayBrightnessValue, "%u%%", displayBrightness);
+  slider(displayCard, 117, 59, 165, displayBrightness, [](lv_event_t* event) {
+    displayBrightness = lv_slider_get_value(static_cast<lv_obj_t*>(lv_event_get_target(event)));
+    lv_label_set_text_fmt(displayBrightnessValue, "%u%%", displayBrightness); applyDisplayBrightness();
+  });
+  makeLabel(displayCard, "Software dimming / backlight off in sleep", 16, 99, &lv_font_montserrat_14, kColorMuted);
+  auto* sleepCard = makeCard(displaySettingsOverlay, 408, 55, 376, 130);
+  makeLabel(sleepCard, LV_SYMBOL_POWER "  Sleep", 16, 12, &lv_font_montserrat_20, kColorText);
+  makeLabel(sleepCard, "Screen off after", 16, 60, &lv_font_montserrat_14, kColorMuted);
+  sleepTimeoutDropdown = dropdown(sleepCard, kSleepTimeoutOptions, 166, 47, 192,
+      sleepTimeoutChoiceIndex(sleepTimeoutMinutes), sleepTimeoutChanged);
+  makeLabel(sleepCard, "Touch to wake. Moon button sleeps now.", 16, 99, &lv_font_montserrat_14, kColorMuted);
+  auto* nightCard = makeCard(displaySettingsOverlay, 16, 195, 768, 180);
+  makeLabel(nightCard, LV_SYMBOL_BELL "  Overnight", 16, 12, &lv_font_montserrat_20, kColorText);
+  auto* enabled = lv_switch_create(nightCard); lv_obj_set_pos(enabled, 692, 12);
+  if (overnightEnabled) lv_obj_add_state(enabled, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(enabled, [](lv_event_t* event) {
+    overnightEnabled = lv_obj_has_state(static_cast<lv_obj_t*>(lv_event_get_target(event)), LV_STATE_CHECKED);
+    saveDisplaySettings(); applyDisplayBrightness();
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+  String times;
+  for (unsigned minute = 0; minute < 1440; minute += 30) {
+    char text[8]; snprintf(text, sizeof(text), "%02u:%02u", minute / 60, minute % 60);
+    if (minute) times += "\n"; times += text;
+  }
+  makeLabel(nightCard, "Screen off at", 16, 66, &lv_font_montserrat_16, kColorMuted);
+  dropdown(nightCard, times.c_str(), 150, 54, 140, overnightOff / 30, [](lv_event_t* event) {
+    overnightOff = lv_dropdown_get_selected(static_cast<lv_obj_t*>(lv_event_get_target(event))) * 30;
+    saveDisplaySettings();
+  });
+  makeLabel(nightCard, "back on at", 326, 66, &lv_font_montserrat_16, kColorMuted);
+  dropdown(nightCard, times.c_str(), 448, 54, 140, overnightOn / 30, [](lv_event_t* event) {
+    overnightOn = lv_dropdown_get_selected(static_cast<lv_obj_t*>(lv_event_get_target(event))) * 30;
+    saveDisplaySettings();
+  });
+  makeLabel(nightCard, "Touch wakes at", 16, 118, &lv_font_montserrat_16, kColorMuted);
+  overnightBrightnessValue = makeLabel(nightCard, "", 366, 118, &lv_font_montserrat_16, kColorText);
+  lv_label_set_text_fmt(overnightBrightnessValue, "%u%%", overnightBrightness);
+  slider(nightCard, 177, 129, 160, overnightBrightness, [](lv_event_t* event) {
+    overnightBrightness = lv_slider_get_value(static_cast<lv_obj_t*>(lv_event_get_target(event)));
+    lv_label_set_text_fmt(overnightBrightnessValue, "%u%%", overnightBrightness); applyDisplayBrightness();
+  });
+  makeLabel(nightCard, "for", 448, 118, &lv_font_montserrat_16, kColorMuted);
+  dropdown(nightCard, "15 s\n30 s\n1 min\n2 min\n5 min", 498, 107, 144, overnightWakeChoice, [](lv_event_t* event) {
+    overnightWakeChoice = lv_dropdown_get_selected(static_cast<lv_obj_t*>(lv_event_get_target(event)));
+    saveDisplaySettings();
+  });
+  makeLabel(nightCard, "After last touch. Equal off/on times disable the overnight period.", 16, 156, &lv_font_montserrat_14, kColorMuted);
+  auto* clockCard = makeCard(displaySettingsOverlay, 16, 385, 768, 185);
+  clockStatusLabel = makeLabel(clockCard, "Clock not set", 16, 12, &lv_font_montserrat_20, kColorText);
+  dropdown(clockCard, TouchClock::kZones, 508, 8, 238, TouchClock::zone(), [](lv_event_t* event) {
+    TouchClock::setZone(lv_dropdown_get_selected(static_cast<lv_obj_t*>(lv_event_get_target(event))));
+  });
+  makeLabel(clockCard, "Phone remote syncs date/time for daylight saving. Manual time uses no date.", 16, 61, &lv_font_montserrat_14, kColorMuted);
+  makeLabel(clockCard, "Or set time", 16, 109, &lv_font_montserrat_16, kColorMuted);
+  String hours, minutes;
+  for (unsigned i = 0; i < 60; ++i) {
+    char text[4]; snprintf(text, sizeof(text), "%02u", i);
+    if (i) minutes += "\n"; minutes += text;
+    if (i < 24) { if (i) hours += "\n"; hours += text; }
+  }
+  clockHourDropdown = dropdown(clockCard, hours.c_str(), 150, 97, 92, 12, nullptr);
+  clockMinuteDropdown = dropdown(clockCard, minutes.c_str(), 253, 97, 92, 0, nullptr);
+  auto* setTime = lv_button_create(clockCard); lv_obj_set_pos(setTime, 360, 97); lv_obj_set_size(setTime, 115, 42);
+  auto* caption = lv_label_create(setTime); lv_label_set_text(caption, "Set time"); lv_obj_center(caption);
+  lv_obj_add_event_cb(setTime, [](lv_event_t*) {
+    TouchClock::setTime(lv_dropdown_get_selected(clockHourDropdown), lv_dropdown_get_selected(clockMinuteDropdown));
+  }, LV_EVENT_CLICKED, nullptr);
+  makeLabel(clockCard, "After restart, sync or set time again. Overnight waits until the clock is set.", 16, 154, &lv_font_montserrat_14, kColorMuted);
+
 }
 
 void createLabelConfigurationOverlays() {
@@ -3300,7 +3406,7 @@ void createLabelConfigurationOverlays() {
   for (uint8_t i = 0; i < kDeviceIconCount; ++i) {
     auto* button = lv_button_create(iconPickerOverlay);
     iconPickerButtons[i] = button;
-    lv_obj_set_pos(button, 140 + (i % 5) * 108, 256 + (i / 5) * 70);
+    lv_obj_set_pos(button, 86 + (i % 6) * 108, 256 + (i / 6) * 70);
     lv_obj_set_size(button, 88, 58);
     lv_obj_set_style_radius(button, 12, 0);
     lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlCard), 0);
@@ -3592,7 +3698,7 @@ void buildUi() {
   addMenuRow(menuPanel, 67, LV_SYMBOL_BELL, "Notifications", "Warnings and system events", kColorAmber, true);
   addMenuRow(menuPanel, 134, LV_SYMBOL_SETTINGS, "System Configuration", "Device assignments, backup and restore", kColorGreen, true);
   addMenuRow(menuPanel, 201, LV_SYMBOL_REFRESH, "Camper Position", "Pitch, roll and level calibration", kColorCyan, true);
-  addMenuRow(menuPanel, 268, LV_SYMBOL_EYE_OPEN, "Display", "Screen sleep and wake behaviour", kColorAmber, true);
+  addMenuRow(menuPanel, 268, LV_SYMBOL_EYE_OPEN, "Display", "Brightness, sleep and overnight schedule", kColorAmber, true);
   addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "Firmware and link diagnostics", kColorMuted, false);
   addMenuHitTarget(menuPanel, 134, openSettings);
   addMenuHitTarget(menuPanel, 201, openCamperPosition);
@@ -3666,13 +3772,15 @@ void refreshUi() {
     lv_label_set_text(shorePowerLabel, "0 W\n--");
   lv_label_set_text_fmt(homeLoadLabel, "%u W\n%+d W net",
                         status.loadPower, status.batteryPower);
+  const auto clock = TouchClock::read();
+  if (clockStatusLabel) lv_label_set_text_fmt(clockStatusLabel, clock.valid ? "Local time %s" : "Clock not set (%s)", clock.text);
   for (lv_obj_t* label : headerClimateLabels) {
     lv_label_set_text_fmt(label,
                           "P %.1f°  R %.1f°  |  "
                           BLUESQUID_SYMBOL_THERMOMETER " %.1f°C  |  "
-                          BLUESQUID_SYMBOL_HUMIDITY " %.0f%%  |",
+                          BLUESQUID_SYMBOL_HUMIDITY " %.0f%%  |  %s",
                           status.pitchDegrees, status.rollDegrees,
-                          status.cabinTemperatureC, status.humidity);
+                          status.cabinTemperatureC, status.humidity, clock.text);
   }
   lv_label_set_text_fmt(settingsPitchLabel, "%.1f°", status.pitchDegrees);
   lv_label_set_text_fmt(settingsRollLabel, "%.1f°", status.rollDegrees);
@@ -3971,6 +4079,15 @@ void setup() {
   } else {
     Serial.println("Warning: touchscreen preferences unavailable");
   }
+  if (uiPreferencesReady) {
+    displayBrightness = constrain(uiPreferences.getUChar("disp_level", 100), 5, 100);
+    overnightBrightness = constrain(uiPreferences.getUChar("night_level", 20), 5, 100);
+    overnightEnabled = uiPreferences.getBool("night_enabled", false);
+    overnightOff = uiPreferences.getUShort("night_off", 1320) % 1440 / 30 * 30;
+    overnightOn = uiPreferences.getUShort("night_on", 420) % 1440 / 30 * 30;
+    overnightWakeChoice = min(unsigned(uiPreferences.getUChar("night_wake", 1)), 4U);
+  }
+  TouchClock::begin();
   loadDeviceLabels();
 
 
@@ -4006,7 +4123,16 @@ void setup() {
       [] { return transportClient.controllerUpdateStatus(); });
   const auto hotspotLogin = TouchHotspot::credentials();
   if (!FirmwareUpdate::begin(&hotspotLogin)) Serial.println("Firmware update service unavailable");
-  lvgl_port_lock(-1); buildUi(); lvgl_port_unlock();
+  lvgl_port_lock(-1);
+  buildUi();
+  displayDimmer = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(displayDimmer);
+  lv_obj_set_size(displayDimmer, 800, 480);
+  lv_obj_remove_flag(displayDimmer, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(displayDimmer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_color(displayDimmer, lv_color_black(), 0);
+  applyDisplayBrightness();
+  lvgl_port_unlock();
   Serial.println("Touchscreen UI ready");
   touchscreenReady = true;
   lastUserActivityMs = millis();
@@ -4019,12 +4145,18 @@ void loop() {
     delay(1000);
     return;
   }
-  if (lvgl_port_take_touch_activity()) lastUserActivityMs = millis();
-  if (lvgl_port_take_wake_request()) wakeDisplay();
-  if (!displaySleeping && sleepTimeoutMinutes != 0) {
-    const uint32_t timeoutMs =
-        static_cast<uint32_t>(sleepTimeoutMinutes) * 60UL * 1000UL;
-    if (millis() - lastUserActivityMs >= timeoutMs) sleepDisplay();
+  if (lvgl_port_lock(20)) {
+    const bool activity = lvgl_port_take_touch_activity();
+    const bool wake = lvgl_port_take_wake_request();
+    const uint32_t now = millis();
+    if (activity || wake) lastUserActivityMs = now;
+    const auto action = displaySchedule.update(overnightNow(), displaySleeping,
+        activity || wake, now, lastUserActivityMs, uint32_t(sleepTimeoutMinutes) * 60000,
+        uint32_t(kNightWakeSeconds[overnightWakeChoice]) * 1000);
+    applyDisplayBrightness();
+    if (action == DisplaySchedule::State::Wake) wakeDisplay();
+    else if (action == DisplaySchedule::State::Sleep) sleepDisplay();
+    lvgl_port_unlock();
   }
   transportClient.update();
   TouchHotspot::update();

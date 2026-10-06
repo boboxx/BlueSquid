@@ -211,6 +211,7 @@ void Sp630eBleAdapter::taskLoop() {
   uint32_t connectedMs = 0;
   uint32_t acknowledgedQueries = 0;
   bool subscriptionRetried = false;
+  bool alternateQueryTried = false;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(25));
     if (!client_->isConnected() || !command_) {
@@ -236,6 +237,7 @@ void Sp630eBleAdapter::taskLoop() {
       connectedMs = millis();
       acknowledgedQueries = 0;
       subscriptionRetried = false;
+      alternateQueryTried = false;
       lastQuery = millis() - Sp630eProtocol::kPollMs;
     }
     portENTER_CRITICAL(&mutex_);
@@ -285,6 +287,18 @@ void Sp630eBleAdapter::taskLoop() {
       vTaskDelay(pdMS_TO_TICKS(100));
       LOG_INFO(kTag, "%s: notification subscription re-armed; retrying status query", label_);
       lastQuery = millis() - Sp630eProtocol::kPollMs;
+    }
+    // Probe only the read-only status query on a silent peripheral. Some
+    // implementations expose both write methods but handle them differently.
+    // A successful transport write never substitutes for valid status feedback.
+    if (silent && subscriptionRetried && !alternateQueryTried &&
+        acknowledgedQueries >= 3 && millis() - lastQuery >= 500 &&
+        command_->canWriteNoResponse()) {
+      alternateQueryTried = true;
+      const bool queued = command_->writeValue(Sp630eProtocol::kQuery,
+          sizeof(Sp630eProtocol::kQuery), false);
+      LOG_WARN(kTag, "%s: read-only status probe without response queued=%u",
+               label_, queued);
     }
     RgbwBleDriverState desired;
     uint32_t revision;
@@ -378,6 +392,24 @@ bool Sp630eBleAdapter::connect() {
   if (!client_->isConnected() && !client_->connect(address, true)) {
     LOG_WARN(kTag, "%s: connection failed (BLE error %d)", label_, client_->getLastError());
     return false;
+  }
+  // Enumerate once per boot before retaining characteristic pointers. This
+  // compares service layout without writing any manufacturer configuration.
+  if (!servicesLogged_) {
+    servicesLogged_ = true;
+    auto* services = client_->getServices(true);
+    if (services) for (auto* discovered : *services) {
+      LOG_INFO(kTag, "%s: GATT service=%s", label_,
+               discovered->getUUID().toString().c_str());
+      auto* characteristics = discovered->getCharacteristics(true);
+      if (characteristics) for (auto* characteristic : *characteristics) {
+        LOG_INFO(kTag, "%s: GATT characteristic=%s handle=%u read=%u write=%u writeNR=%u notify=%u indicate=%u",
+                 label_, characteristic->getUUID().toString().c_str(),
+                 characteristic->getHandle(), characteristic->canRead(),
+                 characteristic->canWrite(), characteristic->canWriteNoResponse(),
+                 characteristic->canNotify(), characteristic->canIndicate());
+      }
+    }
   }
   NimBLERemoteService* service = client_->getService("ffe0");
   if (!service) service = client_->getService("e0ff");

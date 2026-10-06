@@ -57,5 +57,21 @@ int main() {
   assert(d.poll(130000, true, false, true, true) == D::None);
   assert(d.poll(UINT32_MAX-100, false, false, true, true) == D::None);
   assert(d.poll(uint32_t(UINT32_MAX-100)+15000U, false, false, true, true) == D::RetryAddress);
+  // Oct 6: reconnect succeeds after 101 s, maintenance blocks main polling,
+  // then a new disconnect occurs at 125 s. The first outage must not trigger
+  // an immediate reboot even though main never observed online=true.
+  BleDiscoveryRecovery recovered;
+  assert(recovered.poll(1000, false, false, true, true) == D::None);
+  assert(recovered.poll(100000, false, true, true, true) == D::None);
+  recovered.connectionCompleted();
+  assert(recovered.poll(126000, false, false, true, true) == D::None);
+  assert(recovered.poll(140999, false, false, true, true) == D::None);
+  assert(recovered.poll(141000, false, false, true, true) == D::RetryAddress);
+  assert(recovered.poll(245999, false, false, true, true) == D::RetryAddress);
+  assert(recovered.poll(246000, false, false, true, true) == D::Restart);
+  // Completion also resets an old outage when observed during another job.
+  recovered.connectionCompleted();
+  assert(recovered.poll(300000, false, true, true, true) == D::None);
+  assert(recovered.poll(300001, false, false, true, true) == D::None);
   puts("BLE watchdog and discovery recovery tests passed");
 }

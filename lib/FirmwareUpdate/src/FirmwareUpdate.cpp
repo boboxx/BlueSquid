@@ -49,12 +49,9 @@ void randomSecret(char (&out)[33]) {
       (unsigned long)esp_random(), (unsigned long)esp_random(),
       (unsigned long)esp_random(), (unsigned long)esp_random());
 }
-bool authorized() {
-  const auto value = credentials();
-  return server.authenticate(value.username, value.password);
-}
 bool uploadAuthorized() {
-  return authorized() && server.header("X-BlueSquid-OTA") == token;
+  // Network access replaces the separate HTTP login; keep the anti-CSRF token.
+  return server.header("X-BlueSquid-OTA") == token;
 }
 int hashStart() {
 #if MBEDTLS_VERSION_NUMBER >= 0x03000000
@@ -152,7 +149,6 @@ void upload() {
 void finish() {
   server.sendHeader("Cache-Control", "no-store");
   if (restartPending) { server.send(409, "text/plain", "Restart pending."); return; }
-  if (!authorized()) { resetUpload(); server.requestAuthentication(); return; }
   if (!uploadAuthorized()) {
     resetUpload(); server.send(403, "text/plain", "Reload the update page and retry."); return;
   }
@@ -178,7 +174,6 @@ void finish() {
   Serial.printf("OTA: %s update verified; restarting\n", kLabel);
 }
 void controllerNetwork(bool start) {
-  if (!authorized()) { server.requestAuthentication(); return; }
   if (!uploadAuthorized()) { server.send(403); return; }
   if (files || restartPending) { server.send(409, "text/plain", "Update already in progress."); return; }
   const bool accepted = controllerRequest && controllerRequest(start);
@@ -255,13 +250,11 @@ bool begin(const OtaCredentials::Value* hotspot) {
   const char* headers[] = {"X-BlueSquid-OTA"};
   server.collectHeaders(headers, 1);
   server.on("/", HTTP_GET, [] {
-    if (!authorized()) { server.requestAuthentication(); return; }
     server.sendHeader("Cache-Control", "no-store");
     server.sendHeader("X-Frame-Options", "DENY");
     server.send_P(200, "text/html", kUpdatePage);
   });
   server.on("/info", HTTP_GET, [] {
-    if (!authorized()) { server.requestAuthentication(); return; }
     server.sendHeader("Cache-Control", "no-store");
     String body = String("{\"device\":\"") + kLabel + "\",\"version\":\"" +
         AppConfig::kFirmwareVersion + "\",\"token\":\"" + token +
@@ -291,7 +284,7 @@ bool begin(const OtaCredentials::Value* hotspot) {
     server.stop(); ready = false;
     vQueueDelete(credentialQueue); credentialQueue = nullptr; return false;
   }
-  Serial.printf("OTA: %s port 8080; log in with the System hotspot name and password\n", kLabel);
+  Serial.printf("OTA: %s port 8080; no separate page login\n", kLabel);
   if (!ready) Serial.println("OTA: two app partitions required; install via USB first");
   return true;
 }

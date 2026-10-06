@@ -54,6 +54,7 @@ bool ControllerRelay::Backend::begin(size_t size) {
   http.setConnectTimeout(3000);
   http.setTimeout(5000);
   if (!http.begin(infoClient, "http://" + address.toString() + ":8080/info")) return false;
+  // Keep credentials on relay requests so older Controller firmware can still be updated.
   http.setAuthorization(login.username, login.password);
   const int response = http.GET();
   if (response != 200 || http.getSize() < 0 || http.getSize() > 1024) {

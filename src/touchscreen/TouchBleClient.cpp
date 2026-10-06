@@ -2,6 +2,7 @@
 #include "TouchHotspot.h"
 
 #include <NimBLEDevice.h>
+#include <NimBLEUtils.h>
 
 #include "BlueSquidBleProtocol.h"
 #include "AppConfig.h"
@@ -38,8 +39,6 @@ class TouchBleClientCallbacks final : public NimBLEClientCallbacks {
  public:
   explicit TouchBleClientCallbacks(TouchBleClient& owner) : owner_(owner) {}
 
-  void onConnect(NimBLEClient*) override { owner_.applyConnectionParameters(); }
-
   void onDisconnect(NimBLEClient*) override { owner_.disconnected(); }
 
   bool onConnParamsUpdateRequest(NimBLEClient*,
@@ -62,6 +61,17 @@ class TouchBleClientCallbacks final : public NimBLEClientCallbacks {
 bool TouchBleClient::begin() {
   activeClient = this;
   NimBLEDevice::init(kTouchDeviceName);
+  // Observe the actual GAP reason; getLastError() is not the disconnect reason.
+  NimBLEDevice::setCustomGapHandler([](ble_gap_event* event, void*) -> int {
+    if (event->type == BLE_GAP_EVENT_DISCONNECT) {
+      const auto& lost = event->disconnect;
+      Serial.printf("BLE Controller link lost: reason=%d (%s), interval=%.2f ms latency=%u timeout=%u ms\n",
+          lost.reason, NimBLEUtils::returnCodeToString(lost.reason),
+          lost.conn.conn_itvl * 1.25, lost.conn.conn_latency,
+          lost.conn.supervision_timeout * 10U);
+    }
+    return 0;
+  });
   NimBLEDevice::setMTU(185);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   NimBLEDevice::setSecurityAuth(true, false, true);
@@ -285,6 +295,7 @@ void TouchBleClient::connectionTaskEntry(void* context) {
       if (owner->client_ && owner->client_->isConnected()) owner->client_->disconnect();
       owner->disconnected();
     }
+    if (success) owner->discoveryRecovery_.connectionCompleted();
     owner->lastConnectAttemptMs_ = millis();
     Serial.printf("BLE controller reconnect %s\n", success ? "complete" : "failed");
     owner->connectionStage_.store(success ? "online" : "retry");
@@ -310,6 +321,8 @@ bool TouchBleClient::connectToRear() {
     if (client_ == nullptr) return false;
     client_->setClientCallbacks(new TouchBleClientCallbacks(*this), true);
   }
+  // Keep 15–30 ms timing while awake, asleep and discovering services.
+  // Sleep-time renegotiation was followed by link loss and very slow discovery.
   client_->setConnectionParams(12, 24, 0, 300);
   client_->setConnectTimeout(4);
   setConnectionStage("connecting");
@@ -385,7 +398,6 @@ bool TouchBleClient::connectToRear() {
   otaLinkCharacteristic_.store(otaLink);
   otaConnectionRevision_.fetch_add(1);
   otaLinkPollMs_ = millis() - 30000;
-  applyConnectionParameters();
   portENTER_CRITICAL(&scanMutex_);
   lastConnectedAddress_ = address;
   lastConnectedAddressValid_.store(true);
@@ -653,20 +665,6 @@ bool TouchBleClient::connected() const {
          client_ != nullptr && client_->isConnected() &&
          status_.lastHeartbeatMs != 0 &&
          millis() - status_.lastHeartbeatMs <= BlueSquidBle::kOnlineTimeoutMs;
-}
-
-void TouchBleClient::setDisplaySleeping(bool sleeping) {
-  if (displaySleeping_ == sleeping) return;
-  displaySleeping_ = sleeping;
-  applyConnectionParameters();
-}
-
-void TouchBleClient::applyConnectionParameters() {
-  if (client_ == nullptr || !client_->isConnected()) return;
-  if (displaySleeping_)
-    client_->updateConnParams(80, 160, 0, 400);
-  else
-    client_->updateConnParams(12, 24, 0, 300);
 }
 
 void TouchBleClient::snapshotNotification(NimBLERemoteCharacteristic*,

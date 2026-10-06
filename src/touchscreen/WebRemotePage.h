@@ -9,7 +9,9 @@ body{font:17px system-ui;background:#0d1114;color:#f4f7f8;margin:0;padding:20px;
 <p><a id="update" style="color:#35d4e8">Firmware updates</a></p>
 <script>
 document.querySelector("#update").href="http://"+location.hostname+":8080/";
-let token='',busy=false;
+let token='',busy=false,lastClockSync=0;
+async function syncClock(){if(Date.now()-lastClockSync<60000)return;try{const r=await fetch('/api/time',{method:'POST',headers:{'X-BlueSquid-Token':token,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({epoch:Math.floor(Date.now()/1000)})});if(r.ok)lastClockSync=Date.now()}catch(e){}}
+
 const root=document.querySelector('#controls');
 async function command(kind,target,value){if(busy)return;busy=true;document.querySelector('#error').textContent='';try{
  const r=await fetch('/api/command',{method:'POST',headers:{'X-BlueSquid-Token':token,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({kind,target,value})});
@@ -28,7 +30,7 @@ const aux=[0,1,2,3].map(i=>row('output',i,'Output '+(i+1)));
 const inverter=row('inverter',0,'Inverter'),charger=row('charger',0,'Shore charger');
 function updateRow(row,data,online){row.h.textContent=data.label;row.state.textContent=data.available&&online?(data.on?'On':'Off'):'Unavailable';row.s.querySelectorAll('input,button').forEach(x=>x.disabled=!online||!data.available);if(document.activeElement!==row.range)row.range.value=data.level||0;
  row.s.querySelectorAll('[data-key]').forEach(x=>{x.checked=x.dataset.key==='rgbColour'?data.colour:x.dataset.key==='rgbWhite'?data.white:data.coolWhite;x.parentElement.hidden=!data.full||(data.rgbOnly&&x.dataset.key!=='rgbColour')});row.s.querySelectorAll('[type=color]').forEach(x=>x.hidden=!data.full)}
-async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();token=d.token;document.querySelector('#connection').textContent=d.online?'Controller connected':'Controller offline';
+async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();token=d.token;syncClock();document.querySelector('#connection').textContent=d.online?'Controller connected':'Controller offline';
  rgb.forEach((x,i)=>updateRow(x,d.rgb[i],d.online));aux.forEach((x,i)=>updateRow(x,d.outputs[i],d.online));updateRow(inverter,d.inverter,d.online);updateRow(charger,d.charger,d.online);
  document.querySelector('#power').textContent=d.energyValid?`${d.soc}% · ${d.voltage} V · Solar ${d.solar} W · DC/DC ${d.dcdc} W · AC ${d.ac} W`:'Cerbo unavailable';
  }catch(e){document.querySelector('#connection').textContent='Hotspot connection lost';root.querySelectorAll('input,button').forEach(x=>x.disabled=true)}finally{setTimeout(poll,1000)}}poll();

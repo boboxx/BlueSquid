@@ -12,14 +12,6 @@ constexpr char kTag[] = "Sensors";
 #ifndef BLUESQUID_SIMULATED_SENSORS
 #define BLUESQUID_SIMULATED_SENSORS BLUESQUID_SIMULATED_HARDWARE
 #endif
-
-float filteredValue(float previous, float current, bool initialized) {
-  if (!initialized) {
-    return current;
-  }
-  return previous +
-         AppConfig::Sensors::kAttitudeFilterAlpha * (current - previous);
-}
 }
 
 SensorManager::SensorManager(EventManager& eventManager,
@@ -135,8 +127,10 @@ bool SensorManager::calibrateLevel() {
   rollZeroDegrees_ = calibratedRoll;
   absolutePitchDegrees_ = calibratedPitch;
   absoluteRollDegrees_ = calibratedRoll;
-  status_.pitchDegrees = 0.0F;
-  status_.rollDegrees = 0.0F;
+  pitchFilter_.reset(calibratedPitch);
+  rollFilter_.reset(calibratedRoll);
+  status_.pitchDegrees = pitchFilter_.report(pitchZeroDegrees_, true);
+  status_.rollDegrees = rollFilter_.report(rollZeroDegrees_, true);
 
   LOG_INFO(kTag, "Level calibrated at pitch %.1f, roll %.1f",
            pitchZeroDegrees_, rollZeroDegrees_);
@@ -157,8 +151,8 @@ bool SensorManager::setLevelCalibration(float pitchZeroDegrees,
   }
   pitchZeroDegrees_ = pitchZeroDegrees;
   rollZeroDegrees_ = rollZeroDegrees;
-  status_.pitchDegrees = absolutePitchDegrees_ - pitchZeroDegrees_;
-  status_.rollDegrees = absoluteRollDegrees_ - rollZeroDegrees_;
+  status_.pitchDegrees = pitchFilter_.report(pitchZeroDegrees_, true);
+  status_.rollDegrees = rollFilter_.report(rollZeroDegrees_, true);
   eventManager_.publish({EventType::SettingsChanged, millis()});
   return true;
 }
@@ -190,14 +184,12 @@ void SensorManager::readAttitude() {
   const AttitudeSample sample = sampleAttitude();
 
   absolutePitchDegrees_ =
-      filteredValue(absolutePitchDegrees_, sample.pitchDegrees,
-                    attitudeInitialized_);
+      pitchFilter_.update(sample.pitchDegrees, AppConfig::Sensors::kAttitudeFilterAlpha);
   absoluteRollDegrees_ =
-      filteredValue(absoluteRollDegrees_, sample.rollDegrees,
-                    attitudeInitialized_);
+      rollFilter_.update(sample.rollDegrees, AppConfig::Sensors::kAttitudeFilterAlpha);
   attitudeInitialized_ = true;
-  status_.pitchDegrees = absolutePitchDegrees_ - pitchZeroDegrees_;
-  status_.rollDegrees = absoluteRollDegrees_ - rollZeroDegrees_;
+  status_.pitchDegrees = pitchFilter_.report(pitchZeroDegrees_);
+  status_.rollDegrees = rollFilter_.report(rollZeroDegrees_);
   status_.valid = true;
 
   const uint32_t now = millis();
@@ -205,9 +197,9 @@ void SensorManager::readAttitude() {
       AppConfig::Sensors::kAttitudeLogIntervalMs) {
     lastAttitudeLogMs_ = now;
     LOG_INFO(kTag,
-             "GY-61 avg: X=%.0f Y=%.0f Z=%.0f mV; absolute P=%.1f R=%.1f; "
+             "GY-61 avg: X=%.0f Y=%.0f Z=%.0f mV; raw P=%.2f R=%.2f; filtered P=%.2f R=%.2f; "
              "zero P=%.1f R=%.1f; reported P=%.1f R=%.1f",
-             sample.xMv, sample.yMv, sample.zMv, absolutePitchDegrees_,
+             sample.xMv, sample.yMv, sample.zMv, sample.pitchDegrees, sample.rollDegrees, absolutePitchDegrees_,
              absoluteRollDegrees_, pitchZeroDegrees_, rollZeroDegrees_,
              status_.pitchDegrees, status_.rollDegrees);
   }

@@ -7,6 +7,9 @@
 // custom_components/uniled/lib/ble/banlanx_6xx.py. Offsets include the header.
 namespace Sp630eProtocol {
 constexpr uint8_t kQuery[] = {0x53, 0x02, 0x00, 0x01, 0x00, 0x01, 0x01};
+// Observed newer status replies are 186 bytes; ATT notifications need three
+// additional bytes. MTU 185 silently prevents those peripherals replying.
+constexpr uint16_t kPreferredMtu = 247;
 constexpr uint32_t kPollMs = 2000;
 constexpr uint32_t kStaleMs = 8000;
 

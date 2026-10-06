@@ -337,7 +337,7 @@ bool BleManager::begin() {
            AppConfig::kBleDeviceName, deviceSuffix);
 
   NimBLEDevice::init(deviceName);
-  NimBLEDevice::setMTU(185);
+  NimBLEDevice::setMTU(Sp630eProtocol::kPreferredMtu);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   // Bonding plus Secure Connections prevents a new unauthenticated client
   // from silently replacing the installed touchscreen.  With no keyboard or

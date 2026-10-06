@@ -52,7 +52,13 @@ for a board labelled `ESP32-S3-Touch-LCD-7`.
 
 Connect to the touchscreen hotspot and update either device from its browser
 page after a one-time USB installation on both. See [OTA setup and recovery](docs/ota-updates.md)
-for login details and the generated `.bsfw` packages.
+for update instructions and the generated `.bsfw` packages.
+
+## Display and clock
+
+Touchscreen 1.0.36 adds brightness, idle sleep, overnight scheduling and a
+24-hour toolbar clock. See [display settings](docs/display-settings.md) for
+clock synchronization and wake behavior.
 
 ## Features
 

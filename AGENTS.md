@@ -14,3 +14,10 @@ previous version until flashed; different displayed versions are expected
 when only one target needs an update. Use "Controller" in user-facing labels
 and diagnostics, rather than "Rear controller". Keep existing build environment
 names and wire/export identifiers compatible unless a migration is requested.
+
+# Firmware uploads
+
+After completing firmware changes and a successful build, automatically flash
+each affected connected device. The user has authorized this workflow; no
+additional confirmation is needed for routine uploads. Report which devices
+were flashed and any device that could not be reached.

@@ -785,7 +785,25 @@ void pwmRgbHardware() {
   }
   packet[32] = 2; assert(!Sp630eProtocol::decode(packet, sizeof packet, status));
 }
+void extendedStatusReply() {
+  // Header and state from 45:5a's Mac capture; trailing capability data does
+  // not change the light state, but must fit the notification and framing.
+  uint8_t packet[186] = {
+    0x53,0x02,0x00,0x01,0x00,0xB4,0x00,0x01,0x11,0x00,0x44,
+    0x56,0x34,0x2E,0x30,0x2E,0x32,0x36,0x20,0x85,0x03,0x03,
+    0x00,0x3C,0x00,0x02,0x02,0x4B,0x00,0x00,0x00,0x00,0x03,
+    0x01,0x01,0xFF,0xFF,0xFF,0x00,0x00,0xFF,0x00,0x0A,0x1E,
+    0x01,0x10,0x00,0xFF,0x00,0x00,0xFF,0x00,0x01
+  };
+  static_assert(Sp630eProtocol::kPreferredMtu >= sizeof(packet) + 3,
+                "MTU must accommodate extended status notifications");
+  Sp630eProtocol::Status status;
+  assert(Sp630eProtocol::decode(packet, sizeof packet, status));
+  assert(status.configuration == 0x85 && status.mode == 3 && !status.power);
+  assert(!Sp630eProtocol::decode(packet, 182, status));
+}
 int main() {
+  extendedStatusReply();
   assert(!Sp630eProtocol::pollDue(1999, 0, false));
   assert(Sp630eProtocol::pollDue(2000, 0, false));
   assert(!Sp630eProtocol::pollDue(2000, 0, true));

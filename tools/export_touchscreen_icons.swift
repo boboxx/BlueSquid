@@ -12,6 +12,8 @@ struct IconDefinition {
 }
 
 let icons = [
+    IconDefinition(arrayName: "kFlamesBitmap", fileName: "flames.png", width: 24, height: 24),
+    IconDefinition(arrayName: "kSpigotBitmap", fileName: "spigot.png", width: 24, height: 24),
     IconDefinition(arrayName: "kFanBitmap", fileName: "fan.png", width: 24, height: 24),
     IconDefinition(arrayName: "kLightbulbBitmap", fileName: "lightbulb.png", width: 14, height: 24),
     IconDefinition(arrayName: "kSunBitmap", fileName: "sun.png", width: 22, height: 22),

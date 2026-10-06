@@ -4,6 +4,8 @@
 
 // Font Awesome's lightbulb code point. LVGL's bundled symbol subset does not
 // include it, so BlueSquid supplies the two small bitmap glyphs below.
+#define BLUESQUID_SYMBOL_FLAMES "\xEE\x80\x81"
+#define BLUESQUID_SYMBOL_SPIGOT "\xEE\x80\x80"
 #define BLUESQUID_SYMBOL_FAN "\xEF\xA1\xA3"
 #define BLUESQUID_SYMBOL_LIGHTBULB "\xEF\x83\xAB"
 #define BLUESQUID_SYMBOL_SUN "\xEF\x86\x85"

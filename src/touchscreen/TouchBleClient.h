@@ -29,7 +29,6 @@ class TouchBleClient {
   bool send(BlueSquidControl::Command command, uint8_t target, uint16_t value);
   const TouchRemoteStatus& status() const { return status_; }
   bool connected() const;
-  void setDisplaySleeping(bool sleeping);
   uint32_t receivedSnapshotCount() const { return receivedSnapshotCount_; }
   uint32_t receivedAckCount() const { return receivedAckCount_; }
   bool requestSp630eDiscovery();
@@ -74,7 +73,6 @@ class TouchBleClient {
   void startScan();
   void setConnectionStage(const char* stage);
   bool queueConfiguration(const String& command, bool config);
-  void applyConnectionParameters();
   bool sendValueCommand(BlueSquidControl::Command command, uint8_t target,
                         uint16_t value);
   bool sendRgbwState(uint8_t zone);
@@ -123,7 +121,6 @@ class TouchBleClient {
   uint32_t lastScanAttemptMs_ = 0;
   std::atomic<const char*> connectionStage_{"idle"};
   bool initialized_ = false;
-  std::atomic_bool displaySleeping_{false};
   bool assignmentRefreshPending_ = true;
   bool rgbwPending_[4]{};
   bool rgbwAwaitingAck_[4]{};

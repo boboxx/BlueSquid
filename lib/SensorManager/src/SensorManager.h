@@ -6,6 +6,7 @@
 #include "EventManager.h"
 #include "SettingsManager.h"
 #include "SystemTypes.h"
+#include "LevelFilter.h"
 
 class SensorManager {
  public:
@@ -40,6 +41,7 @@ class SensorManager {
   Adafruit_HTU21DF htu21d_;
   bool htu21dReady_ = false;
   bool attitudeInitialized_ = false;
+  LevelFilter pitchFilter_, rollFilter_;
   float absolutePitchDegrees_ = 0.0F;
   float absoluteRollDegrees_ = 0.0F;
   float pitchZeroDegrees_ = 0.0F;

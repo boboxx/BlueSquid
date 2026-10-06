@@ -1,4 +1,5 @@
 #include "TouchHotspot.h"
+#include "TouchClock.h"
 #include "WifiDefaults.h"
 #include "FirmwareUpdate.h"
 #include <Preferences.h>
@@ -63,6 +64,13 @@ bool begin() {
     String body; serializeJson(doc,body);
     server.sendHeader("Cache-Control","no-store");
     server.send(200,"application/json",body);
+  });
+  server.on("/api/time", HTTP_POST, [] {
+    if (server.header("X-BlueSquid-Token") != token) { server.send(403); return; }
+    const String value = server.arg("epoch");
+    if (value.length() != 10) { server.send(400); return; }
+    for (char c : value) if (c < '0' || c > '9') { server.send(400); return; }
+    server.send(TouchClock::sync(strtoll(value.c_str(), nullptr, 10)) ? 204 : 400);
   });
   server.on("/api/command",HTTP_POST,[]{
     if (server.header("X-BlueSquid-Token")!=token) {server.send(403);return;}

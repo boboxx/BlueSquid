@@ -61,6 +61,7 @@ class Sp630eBleAdapter final : public RgbwBleDriverAdapter {
   uint8_t configuration_ = 0;
   Sp630eProtocol::ResponseHealth responseHealth_;
   Sp630eProtocol::WarmCommandCache warmCache_;
+  bool servicesLogged_ = false;
   bool queryPending_ = false;
   bool reportValid_ = false;
   bool acceptReport_ = false;

@@ -26,8 +26,9 @@ unaffected. Do not erase the entire flash. The Controller retains its existing
 1. Connect your phone or computer to the BlueSquid **System hotspot**.
 2. Open `http://192.168.4.1:8080/`, or the address under **System Configuration
    → Firmware updates**. The phone remote also links to this page.
-3. Sign in with the **System hotspot SSID as the username** and its **Wi-Fi
-   password as the password**.
+3. The page opens without a separate username/password prompt on Controller
+   1.0.24 and Touchscreen 1.0.35 or later. Earlier versions still use the System
+   hotspot SSID and Wi-Fi password as the page login.
 4. Choose **Controller**, select its `.bsfw` package and press **Install update**.
    Stay on the BlueSquid hotspot. The page prepares the connection and transfers
    the file; the Controller checks it and restarts. The touchscreen stays online.
@@ -77,7 +78,7 @@ apply afterward. Passwords are never printed in startup logs or returned by BLE
 reads; credential acknowledgements contain only a request ID.
 
 The Controller's direct updater remains available at `http://<Controller IP>:8080/`
-from its current Wi-Fi network, using the same System hotspot login. This is
+from its current Wi-Fi network, without a separate page login. This is
 an alternative for diagnostics; normal updates use the touchscreen page.
 
 ## Validation and recovery
@@ -95,8 +96,10 @@ A broken connection before finalization leaves the previous firmware selected.
 If the final acknowledgement is lost, check the installed version before retrying:
 the update may already have completed.
 
-HTTP access uses the System hotspot login and an anti-CSRF token. Do not expose
-port 8080 to the Internet. The checksum detects corruption; it is not a firmware
+Access relies on Wi-Fi/network access; anyone able to reach port 8080 can use
+the updater, including on the Controller’s Cerbo network. Uploads and network
+changes still require the page’s anti-CSRF token. Do not expose port 8080 to
+the Internet. The checksum detects corruption; it is not a firmware
 signature. Install packages from trusted builds.
 
 The bundled frameworks enable bootloader rollback, but Arduino confirms the

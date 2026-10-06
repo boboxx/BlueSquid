@@ -15,7 +15,7 @@ const status=document.querySelector('#status'),button=document.querySelector('#b
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function lock(value){busy=value;button.disabled=value||!info;target.disabled=fileInput.disabled=value}
 async function request(path,options={}){const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),6000);try{return await fetch(path,{cache:'no-store',...options,signal:controller.signal})}finally{clearTimeout(timeout)}}
-async function getInfo(){const r=await request('/info');if(!r.ok)throw Error('Sign in with the hotspot name and password, then reload.');info=await r.json();token=info.token;
+async function getInfo(){const r=await request('/info');if(!r.ok)throw Error('Update page unavailable. Check your Wi-Fi connection and reload.');info=await r.json();token=info.token;
 let description=info.device+' '+info.version;if(info.relay){const c=info.controller;description+=' · Controller '+(c.connected?(c.version==='0.0.0'?'connected':c.version):'offline');document.querySelector('#targetLabel').hidden=false;document.querySelector('#hint').textContent='Stay on the BlueSquid hotspot for both updates. Update the Controller first, then the touchscreen. Cerbo readings pause during a Controller update.'}else target.value='local';
 document.querySelector('#device').textContent=description;if(!busy)button.disabled=false;return info}
 async function network(start){const r=await request('/controller/'+(start?'connect':'disconnect'),{method:'POST',headers:{'X-BlueSquid-OTA':token}});if(!r.ok)throw Error(await r.text()||'Controller unavailable.')}

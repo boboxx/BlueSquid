@@ -118,12 +118,14 @@ void setup() {
 
 void loop() {
   outputController.update();
-  rgbwBleDriverManager.update();
+  const bool lightFeedbackChanged = rgbwBleDriverManager.update();
   sensorManager.update();
   bleManager.update();
   cerboWifiManager.update();
   rvcFanManager.update();
-  if (lightSwitchManager.update()) {
+  const bool lightSwitchChanged = lightSwitchManager.update();
+  if (lightSwitchManager.consumePairingRequest()) bleManager.openPairingWindow();
+  if (lightSwitchChanged || lightFeedbackChanged) {
     bleManager.publishStatus(collectSystemStatus());
     lastStatusPublishMs = millis();
   }

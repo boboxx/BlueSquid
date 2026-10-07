@@ -243,13 +243,19 @@ void BatteryManager::update() {
   next.shuntValid = next.solarValid = next.dcDcValid = next.valid = true;
   next.solarChargerState = 3; next.dcDcChargerState = 5;
 #else
+  portENTER_CRITICAL(&statusMux_);
   const int8_t requestedMode = pendingInverterMode_;
+  pendingInverterMode_ = -1;
+  portEXIT_CRITICAL(&statusMux_);
   if (requestedMode >= 0) {
-    pendingInverterMode_ = -1;
-    if (!cerbo_->writeInverterMode(static_cast<uint8_t>(requestedMode)))
+    if (!cerbo_->writeInverterMode(static_cast<uint8_t>(requestedMode))) {
+      portENTER_CRITICAL(&statusMux_);
+      modeRequest_.failed(static_cast<uint8_t>(requestedMode));
+      portEXIT_CRITICAL(&statusMux_);
       LOG_WARN(kTag, "Failed to set VE.Bus inverter mode");
-    else
+    } else {
       LOG_INFO(kTag, "VE.Bus inverter mode set to %d", requestedMode);
+    }
   }
   cerbo_->poll();
   if (cerbo_->fresh(millis())) {
@@ -298,6 +304,7 @@ bool BatteryManager::consumeStatusChanged() {
 void BatteryManager::commitStatus(const BatteryStatus& status) {
   portENTER_CRITICAL(&statusMux_);
   if (different(status_, status)) { status_ = status; statusChanged_ = true; }
+  modeRequest_.observe(status.inverterMode, status.inverterValid);
   portEXIT_CRITICAL(&statusMux_);
 }
 
@@ -314,23 +321,22 @@ bool BatteryManager::setCapacityAh(float capacityAh) {
 }
 
 bool BatteryManager::setInverterEnabled(bool enabled) {
-  if (cerbo_ == nullptr) return false;
-  const uint8_t current = status().inverterMode;
-  const bool chargerEnabled = current == 1 || current == 3;
-  pendingInverterMode_ = enabled ? (chargerEnabled ? 3 : 2)
-                                 : (chargerEnabled ? 1 : 4);
-  LOG_INFO(kTag, "Inverter %s requested; current mode=%u, target mode=%d",
-           enabled ? "on" : "off", current, pendingInverterMode_);
-  return true;
+  return requestInverterMode(true, enabled);
 }
 
 bool BatteryManager::setChargerEnabled(bool enabled) {
+  return requestInverterMode(false, enabled);
+}
+
+bool BatteryManager::requestInverterMode(bool inverter, bool enabled) {
   if (cerbo_ == nullptr) return false;
-  const uint8_t current = status().inverterMode;
-  const bool inverterEnabled = current == 2 || current == 3;
-  pendingInverterMode_ = enabled ? (inverterEnabled ? 3 : 1)
-                                 : (inverterEnabled ? 2 : 4);
-  LOG_INFO(kTag, "Charger %s requested; current mode=%u, target mode=%d",
-           enabled ? "on" : "off", current, pendingInverterMode_);
+  portENTER_CRITICAL(&statusMux_);
+  const uint8_t reported = status_.inverterMode;
+  const uint8_t current = modeRequest_.base(reported, millis());
+  const uint8_t target = modeRequest_.request(inverter, enabled, reported, millis());
+  pendingInverterMode_ = static_cast<int8_t>(target);
+  portEXIT_CRITICAL(&statusMux_);
+  LOG_INFO(kTag, "%s %s requested; current mode=%u, target mode=%u",
+           inverter ? "Inverter" : "Charger", enabled ? "on" : "off", current, target);
   return true;
 }

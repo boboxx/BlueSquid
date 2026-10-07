@@ -12,7 +12,9 @@ trap 'rm -f "$all_lights_binary"' EXIT HUP INT TERM
   -I tests/all_lights/support -I include \
   -I lib/LightSwitchManager/src -I lib/OutputController/src \
   -I lib/EventManager/src -I lib/SettingsManager/src \
+  -I lib/RgbwBleDriverManager/src \
   tests/all_lights/test.cpp lib/OutputController/src/OutputController.cpp \
+  lib/RgbwBleDriverManager/src/RgbwBleDriverManager.cpp \
   lib/LightSwitchManager/src/LightSwitchManager.cpp lib/EventManager/src/EventManager.cpp \
   -o "$all_lights_binary"
 "$all_lights_binary"

@@ -1,4 +1,5 @@
 #include "PendingControl.h"
+#include "SnapshotRevisionGate.h"
 #include <cassert>
 #include <initializer_list>
 int main() {
@@ -21,4 +22,20 @@ int main() {
   brightness.begin(60, UINT32_MAX - 100);
   assert(brightness.display(20, 100, 8000) == 60);
   assert(brightness.display(20, 8000, 8000) == 20);
+  // A local request is not a received snapshot. Hold the on display until
+  // the Controller accepts it and a snapshot at/after its revision arrives.
+  PendingControl<bool> light;
+  SnapshotRevisionGate gate;
+  light.begin(true, 100);
+  assert(light.display(false, 200, 8000) && light.waiting);
+  gate.expect(42);
+  assert(!gate.accepts(41));
+  assert(light.display(false, 300, 8000) && light.waiting);
+  assert(gate.accepts(42));
+  assert(light.display(true, 400, 8000) && !light.waiting);
+  assert(!gate.accepts(41)); // Late stale snapshot after confirmation.
+  gate.expect(44); // A newer tap replaces the earlier revision floor.
+  assert(!gate.accepts(43) && gate.accepts(45));
+  gate.expect(0); // Revision wraparound is valid.
+  assert(!gate.accepts(UINT32_MAX) && gate.accepts(0));
 }

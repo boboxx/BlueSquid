@@ -4,6 +4,7 @@
 #include "Sp630eConfiguration.h"
 #include "ColourWheel.h"
 #include "TouchHotspot.h"
+#include <nvs_flash.h>
 #include "TouchClock.h"
 #include "DisplaySchedule.h"
 #include "FirmwareUpdate.h"
@@ -106,6 +107,12 @@ uint8_t deviceIconColours[kDeviceLabelCount]{};
 lv_obj_t* iconPickerPreview = nullptr;
 lv_obj_t* iconColourSwatches[kIconColourCount]{};
 uint8_t editedDeviceColour = 0;
+// Colour used when no custom colour is chosen. All accessories share amber.
+uint32_t defaultDeviceColour(uint8_t label) {
+  return label >= kLabelAccessory1 && label <= kLabelAccessory4 ? kColorAmber
+                                                                 : kColorCyan;
+}
+
 uint32_t deviceIconColour(uint8_t label, uint32_t fallback) {
   const uint8_t choice = deviceIconColours[label];
   return choice && choice < kIconColourCount ? kIconColours[choice] : fallback;
@@ -173,10 +180,10 @@ DeviceLabelSetting deviceLabels[kDeviceLabelCount] = {
     {"rgbw_2", "i_rgbw2", "RGB Light 2", "RGB Light 2", 0, 0},
     {"rgbw_3", "i_rgbw3", "RGB Light 3", "RGB Light 3", 0, 0},
     {"rgbw_4", "i_rgbw4", "RGB Light 4", "RGB Light 4", 0, 0},
-    {"accessory_1", "i_acc1", "Accessory 1", "Accessory 1", 2, 2},
-    {"accessory_2", "i_acc2", "Accessory 2", "Accessory 2", 3, 3},
-    {"accessory_3", "i_acc3", "Accessory 3", "Accessory 3", 1, 1},
-    {"accessory_4", "i_acc4", "Accessory 4", "Accessory 4", 1, 1},
+    {"accessory_1", "i_acc1", "Accessory 1", "Accessory 1", kIconPlug, kIconPlug},
+    {"accessory_2", "i_acc2", "Accessory 2", "Accessory 2", kIconPlug, kIconPlug},
+    {"accessory_3", "i_acc3", "Accessory 3", "Accessory 3", kIconPlug, kIconPlug},
+    {"accessory_4", "i_acc4", "Accessory 4", "Accessory 4", kIconPlug, kIconPlug},
 };
 
 using PendingState = PendingControl<bool>;
@@ -326,7 +333,8 @@ uint8_t editedDeviceLabel = 0;
 uint8_t editedDeviceIcon = 0;
 Preferences uiPreferences;
 uint8_t activeColorZone = 0;
-uint8_t selectedRgb[4][3]{{100, 0, 0}, {100, 0, 0}, {100, 0, 0}, {100, 0, 0}};
+// Matches the Controller's default colour preset: white.
+uint8_t selectedRgb[4][3]{{100, 100, 100}, {100, 100, 100}, {100, 100, 100}, {100, 100, 100}};
 uint8_t desiredBrightness[4]{100, 100, 100, 100};
 uint8_t lastZoneBrightness[4]{100, 100, 100, 100};
 bool desiredColorEnabled[4]{false, false};
@@ -363,8 +371,14 @@ bool fullLightType(uint8_t target) {
          Sp630eChannels::colourType(assignedSp630eChannels[target]);
 }
 
+// Outputs marked as wired on the light's Edit device page (full strips only).
+uint8_t lightCapabilities(uint8_t zone) {
+  return fullLightType(zone) ? Sp630eChannels::capabilities(assignedSp630eChannels[zone]) : 0;
+}
+
+// A full strip without white outputs makes white from RGB.
 bool rgbOnlyLightType(uint8_t zone) {
-  return fullLightType(zone) && assignedSp630eChannels[zone] == Sp630eChannels::rgbOnly;
+  return fullLightType(zone) && !(lightCapabilities(zone) & 6);
 }
 
 lv_color_t zoneColor(uint8_t zone);
@@ -658,7 +672,7 @@ void applyDeviceLabels() {
     }
     setDeviceIcon(labelConfigIconLabels[index], deviceLabels[index].icon);
     for (auto* icon : {deviceConfigIconLabels[index], labelConfigIconLabels[index]})
-      if (icon) lv_obj_set_style_text_color(icon, lv_color_hex(deviceIconColour(index, kColorCyan)), 0);
+      if (icon) lv_obj_set_style_text_color(icon, lv_color_hex(deviceIconColour(index, defaultDeviceColour(index))), 0);
   }
   applyDeviceDisplayLayout();
 }
@@ -1178,6 +1192,18 @@ void holdZoneState(uint8_t zone, bool enabled) {
 }
 
 bool sendZoneOutputs(uint8_t zone, bool enabled) {
+  if (fullLightType(zone)) {
+    // Requests for outputs that are not wired use the closest wired output.
+    const uint8_t wired = lightCapabilities(zone);
+    if (desiredColorEnabled[zone] && !(wired & Sp630eChannels::kColour)) {
+      desiredColorEnabled[zone] = false;
+      desiredWhiteEnabled[zone] = true;
+    }
+    if (desiredWhiteEnabled[zone] && (wired & 6)) {
+      const uint8_t tone = desiredWhiteTone[zone] & wired;
+      desiredWhiteTone[zone] = tone ? tone : wired & 6;
+    }
+  }
   if (rgbOnlyLightType(zone)) {
     if (desiredWhiteEnabled[zone]) desiredColorEnabled[zone] = true;
     desiredWhiteEnabled[zone] = false;
@@ -1253,17 +1279,33 @@ void colorWheelChanged(lv_event_t* event) {
   applyZoneSelection(activeColorZone);
 }
 
+// Show only the wired outputs, stacked without gaps.
 void syncWhiteSelections(uint8_t zone) {
-  lv_obj_t* switches[] = {colorDialogWhiteEnableSwitch, colorDialogCoolWhiteSwitch};
-  for (uint8_t i = 0; i < 2; ++i) {
-    for (lv_obj_t* object : {switches[i], colorDialogChannelLabels[i + 1]}) {
-      if (rgbOnlyLightType(zone)) lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
-      else lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
+  const uint8_t wired = fullLightType(zone) ? lightCapabilities(zone)
+                                            : Sp630eChannels::kAllCapabilities;
+  lv_obj_t* switches[] = {colorDialogEnableSwitch, colorDialogWhiteEnableSwitch,
+                          colorDialogCoolWhiteSwitch};
+  const uint8_t bits[] = {Sp630eChannels::kColour, Sp630eChannels::kWarmWhite,
+                          Sp630eChannels::kCoolWhite};
+  uint8_t row = 0;
+  for (uint8_t i = 0; i < 3; ++i) {
+    const bool shown = wired & bits[i];
+    for (lv_obj_t* object : {switches[i], colorDialogChannelLabels[i]}) {
+      if (shown) lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
+      else lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
     }
-    if (!rgbOnlyLightType(zone) && desiredWhiteEnabled[zone] && (desiredWhiteTone[zone] & (2U << i)))
+    if (shown) {
+      lv_obj_set_pos(colorDialogChannelLabels[i], 16, 57 + row * 52);
+      lv_obj_set_pos(switches[i], 200, 50 + row * 52);
+      ++row;
+    }
+    if (i == 0) continue;
+    if (shown && desiredWhiteEnabled[zone] && (desiredWhiteTone[zone] & bits[i]))
       lv_obj_add_state(switches[i], LV_STATE_CHECKED);
     else lv_obj_remove_state(switches[i], LV_STATE_CHECKED);
   }
+  if (wired & Sp630eChannels::kColour) lv_obj_remove_flag(colorDialogWheel, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(colorDialogWheel, LV_OBJ_FLAG_HIDDEN);
 }
 
 void openColorDialog(lv_event_t* event) {
@@ -1467,7 +1509,7 @@ void toggleChanged(lv_event_t* event) {
   }
 
   int outputIndex = -1;
-  uint32_t accent = kColorCyan;
+  const uint32_t accent = defaultDeviceColour(kLabelAccessory1);
   switch (logicalCommand) {
     case BlueSquidControl::Command::SetUsb:
       outputIndex = 0;
@@ -1477,11 +1519,9 @@ void toggleChanged(lv_event_t* event) {
       break;
     case BlueSquidControl::Command::SetAccessory3:
       outputIndex = 2;
-      accent = kColorAmber;
       break;
     case BlueSquidControl::Command::SetAccessory4:
       outputIndex = 3;
-      accent = kColorAmber;
       break;
     case BlueSquidControl::Command::SetAllLights: {
       const bool previous = transportClient.status().anyLightsEnabled(savedLightGroup);
@@ -1758,8 +1798,10 @@ bool sp630eSeenInScan[8]{};
 
 String sp630eAssignmentLabel(uint8_t device, uint8_t target, uint8_t channel,
                               const String& type) {
-  const bool saved = sp630eConfigLoaded &&
-      assignedSp630eChannels[target] == channel &&
+  const bool sameType = Sp630eChannels::colourType(channel)
+      ? Sp630eChannels::colourType(assignedSp630eChannels[target])
+      : assignedSp630eChannels[target] == channel;
+  const bool saved = sp630eConfigLoaded && sameType &&
       assignedSp630eAddresses[target].equalsIgnoreCase(discoveredSp630eAddresses[device]);
   return discoveredSp630eAddresses[device] + " / " + type +
       (saved ? " [saved]" : sp630eSeenInScan[device] ? " [seen]" : "");
@@ -1771,7 +1813,7 @@ void refreshSp630eDropdowns() {
     if (sp630eDropdowns[target] == nullptr) continue;
     String options = "Not assigned";
     for (uint8_t device = 0; device < discoveredSp630eCount; ++device) {
-      options += "\n" + sp630eAssignmentLabel(device, target, Sp630eChannels::fullStrip, "Full RGBCWWW");
+      // Which outputs a full strip drives is chosen on its Edit device page.
       options += "\n" + sp630eAssignmentLabel(device, target, Sp630eChannels::rgbOnly, "Full RGB");
       for (uint8_t channel = 0; channel < Sp630eChannels::count; ++channel)
         options += "\n" + sp630eAssignmentLabel(device, target, Sp630eChannels::ids[channel], String("Single ") + channels[channel]);
@@ -1991,7 +2033,7 @@ void sp630eAssignmentChanged(lv_event_t* event) {
     const uint8_t device = choice / perDevice;
     if (device >= discoveredSp630eCount) return;
     const uint8_t position = choice % perDevice;
-    channel = target < 4 ? Sp630eChannels::lightChannel(position)
+    channel = target < 4 ? Sp630eChannels::lightChannel(position, draftSp630eChannels[target])
                          : Sp630eChannels::ids[position];
     address = discoveredSp630eAddresses[device];
   }
@@ -2210,6 +2252,46 @@ void openLabelConfiguration(lv_event_t* event) {
   lv_obj_move_foreground(labelConfigOverlay);
 }
 
+lv_obj_t* labelEditorChannelsRow = nullptr;
+lv_obj_t* labelEditorChannelSwitches[3]{};
+constexpr uint8_t kChannelSwitchBits[3] = {
+    Sp630eChannels::kColour, Sp630eChannels::kWarmWhite, Sp630eChannels::kCoolWhite};
+
+uint8_t editedLightOutputs() {
+  uint8_t outputs = 0;
+  for (uint8_t i = 0; i < 3; ++i)
+    if (lv_obj_has_state(labelEditorChannelSwitches[i], LV_STATE_CHECKED))
+      outputs |= kChannelSwitchBits[i];
+  return outputs;
+}
+
+void lightOutputSwitchChanged(lv_event_t* event) {
+  // A light needs at least one wired output.
+  if (editedLightOutputs() == 0)
+    lv_obj_add_state(static_cast<lv_obj_t*>(lv_event_get_target(event)), LV_STATE_CHECKED);
+}
+
+// Saves a full strip's wired outputs with the other assignments unchanged.
+bool saveLightOutputs(uint8_t zone, uint8_t outputs) {
+  const uint8_t channel = Sp630eChannels::fullStripChannel(outputs);
+  String body = String(savedLightGroup) + "|";
+  for (uint8_t i = 0; i < 8; ++i)
+    body += String(i) + "," + String(i == zone ? channel : assignedSp630eChannels[i]) + "," +
+            (assignedSp630eAddresses[i].isEmpty() ? String("none") : assignedSp630eAddresses[i]) + ";";
+  Sp630eAssignment rows[8]{}; uint8_t group;
+  if (!parseSp630eConfiguration(body.c_str(), rows, group) ||
+      !transportClient.saveSp630eConfiguration(body)) return false;
+  assignedSp630eChannels[zone] = channel;
+  if (draftSp630eAddresses[zone].equalsIgnoreCase(assignedSp630eAddresses[zone]) &&
+      Sp630eChannels::colourType(draftSp630eChannels[zone]))
+    draftSp630eChannels[zone] = channel;
+  sp630eSavePending = true;
+  sp630eSaveStartedMs = millis();
+  Serial.printf("Light %u outputs saved (channel %u); Controller restarts once\n",
+                zone + 1, channel);
+  return true;
+}
+
 void openDeviceLabelEditor(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   editedDeviceLabel = static_cast<uint8_t>(
@@ -2217,8 +2299,28 @@ void openDeviceLabelEditor(lv_event_t* event) {
   if (editedDeviceLabel >= kDeviceLabelCount) return;
   editedDeviceIcon = deviceLabels[editedDeviceLabel].icon;
   editedDeviceColour = deviceIconColours[editedDeviceLabel];
+  // RGB lights assigned as a full strip choose their wired outputs here.
+  const uint8_t lightZone = editedDeviceLabel - kLabelRgbwLight1;
+  const bool showOutputs = editedDeviceLabel >= kLabelRgbwLight1 &&
+      editedDeviceLabel <= kLabelRgbwLight4 && sp630eConfigLoaded &&
+      fullLightType(lightZone);
+  if (showOutputs) {
+    const uint8_t wired = lightCapabilities(lightZone);
+    for (uint8_t i = 0; i < 3; ++i) {
+      if (wired & kChannelSwitchBits[i]) lv_obj_add_state(labelEditorChannelSwitches[i], LV_STATE_CHECKED);
+      else lv_obj_remove_state(labelEditorChannelSwitches[i], LV_STATE_CHECKED);
+    }
+    lv_obj_remove_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(labelEditorKeyboard, 800, 208);
+    lv_obj_align(labelEditorKeyboard, LV_ALIGN_TOP_LEFT, 0, 192);
+  } else {
+    lv_obj_add_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(labelEditorKeyboard, 800, 258);
+    lv_obj_align(labelEditorKeyboard, LV_ALIGN_TOP_LEFT, 0, 142);
+  }
   lv_obj_set_style_text_color(labelEditorIconLabel,
-      lv_color_hex(deviceIconColour(editedDeviceLabel, kColorCyan)), 0);
+      lv_color_hex(deviceIconColour(editedDeviceLabel,
+                                    defaultDeviceColour(editedDeviceLabel))), 0);
   lv_label_set_text_fmt(labelEditorTitle, "Name for %s",
                         deviceLabels[editedDeviceLabel].channelName);
   lv_textarea_set_text(labelEditorTextArea,
@@ -2243,7 +2345,8 @@ void openDeviceLabelEditor(lv_event_t* event) {
 }
 
 void refreshIconPicker() {
-  const uint32_t colour = editedDeviceColour ? kIconColours[editedDeviceColour] : kColorCyan;
+  const uint32_t colour = editedDeviceColour ? kIconColours[editedDeviceColour]
+                                             : defaultDeviceColour(editedDeviceLabel);
   setDeviceIcon(iconPickerPreview, editedDeviceIcon);
   setDeviceIcon(labelEditorIconLabel, editedDeviceIcon);
   lv_obj_set_style_text_color(iconPickerPreview, lv_color_hex(colour), 0);
@@ -2336,6 +2439,12 @@ void saveDeviceLabel(lv_event_t* event) {
       uiPreferences.putBool(visibleKey, deviceVisible[index]);
       uiPreferences.putUChar(orderKey, deviceOrder[index]);
     }
+  }
+  if (!lv_obj_has_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN)) {
+    const uint8_t zone = editedDeviceLabel - kLabelRgbwLight1;
+    const uint8_t outputs = editedLightOutputs();
+    if (outputs != lightCapabilities(zone) && !saveLightOutputs(zone, outputs))
+      Serial.printf("Light %u outputs not saved: Controller offline\n", zone + 1);
   }
   applyDeviceLabels();
   lv_obj_add_flag(labelEditorOverlay, LV_OBJ_FLAG_HIDDEN);
@@ -3016,6 +3125,117 @@ void showFirmwareUpdate(lv_event_t*) {
   lv_obj_move_foreground(overlay);
 }
 
+lv_obj_t* pairingStatusLabel = nullptr;
+lv_timer_t* pairingTimer = nullptr;
+uint32_t pairingRequestedMs = 0;
+
+void pairingTimerTick(lv_timer_t* timer) {
+  const uint8_t result = transportClient.actionResult();
+  if (result == 1)
+    lv_label_set_text(pairingStatusLabel,
+        "Pairing open for 2 minutes: power on the new touchscreen now.");
+  else if (result == 2)
+    lv_label_set_text(pairingStatusLabel,
+        "Controller declined. Update the Controller, or hold its lights button 5 s.");
+  else if (millis() - pairingRequestedMs < 5000)
+    return;
+  else
+    lv_label_set_text(pairingStatusLabel, "No answer from the Controller. Try again.");
+  lv_timer_pause(timer);
+}
+
+void pairTouchscreenClicked(lv_event_t*) {
+  if (!transportClient.requestAction(BlueSquidControl::Command::OpenPairing, 1)) {
+    lv_label_set_text(pairingStatusLabel, "Controller offline. Try again once connected.");
+    return;
+  }
+  Serial.println("Pair another touchscreen: request sent to Controller");
+  lv_label_set_text(pairingStatusLabel, "Asking the Controller...");
+  pairingRequestedMs = millis();
+  if (pairingTimer) lv_timer_resume(pairingTimer);
+  else pairingTimer = lv_timer_create(pairingTimerTick, 250, nullptr);
+}
+
+lv_obj_t* factoryResetOverlay = nullptr;
+lv_obj_t* factoryResetStatus = nullptr;
+lv_timer_t* factoryResetTimer = nullptr;
+uint32_t factoryResetRequestedMs = 0;
+bool factoryResetErasing = false;
+
+void factoryResetTick(lv_timer_t* timer) {
+  if (factoryResetErasing) {
+    // One tick after the message was shown, so it is on screen.
+    Serial.println("Factory reset: Controller confirmed; erasing touchscreen settings");
+    nvs_flash_erase();
+    transportClient.restartQuietly();
+    return;
+  }
+  const uint8_t result = transportClient.actionResult();
+  if (result == 1) {
+    lv_label_set_text(factoryResetStatus,
+        "Controller confirmed. Erasing the touchscreen and restarting...");
+    factoryResetErasing = true;
+    return;
+  }
+  if (result == 2)
+    lv_label_set_text(factoryResetStatus,
+        "Controller declined; update its firmware first. Nothing was erased.");
+  else if (millis() - factoryResetRequestedMs < 5000)
+    return;
+  else
+    lv_label_set_text(factoryResetStatus, "No answer from the Controller. Nothing was erased.");
+  lv_timer_pause(timer);
+}
+
+void factoryResetConfirmed(lv_event_t*) {
+  // Erase the Controller first: if the touchscreen reset alone, the
+  // Controller would still hold its old pairing and refuse the new one.
+  if (!transportClient.requestAction(BlueSquidControl::Command::FactoryReset,
+                                     BlueSquidControl::kFactoryResetConfirmation)) {
+    lv_label_set_text(factoryResetStatus, "Controller offline. Nothing was erased.");
+    return;
+  }
+  Serial.println("Factory reset: request sent to Controller");
+  lv_label_set_text(factoryResetStatus, "Asking the Controller to reset...");
+  factoryResetRequestedMs = millis();
+  if (factoryResetTimer) lv_timer_resume(factoryResetTimer);
+  else factoryResetTimer = lv_timer_create(factoryResetTick, 250, nullptr);
+}
+
+void openFactoryReset(lv_event_t*) {
+  if (!factoryResetOverlay) {
+    factoryResetOverlay = createPageOverlay("Factory reset");
+    auto* text = makeLabel(factoryResetOverlay,
+        "Erases all settings on this touchscreen and the Controller, then both restart\n"
+        "and pair again automatically:\n\n"
+        "  - SP630E assignments, light group and saved light presets\n"
+        "  - Cerbo Wi-Fi, VE.Bus ID, battery capacity, level calibration, RV-C fan\n"
+        "  - Device names, icons, display and clock settings, system hotspot\n"
+        "  - Bluetooth pairings (other touchscreens must be paired again)\n\n"
+        "Backups on the SD card are kept. Export first to restore later.",
+        24, 64, &lv_font_montserrat_16, kColorText);
+    lv_obj_set_width(text, 752);
+    lv_obj_t* erase = lv_button_create(factoryResetOverlay);
+    lv_obj_set_pos(erase, 24, 300);
+    lv_obj_set_size(erase, 300, 60);
+    lv_obj_set_style_radius(erase, 18, 0);
+    lv_obj_set_style_bg_color(erase, lv_color_hex(kColorRed), 0);
+    lv_obj_set_style_shadow_width(erase, 0, 0);
+    lv_obj_add_event_cb(erase, factoryResetConfirmed, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* caption = lv_label_create(erase);
+    lv_label_set_text(caption, LV_SYMBOL_TRASH "  Erase both devices");
+    lv_obj_set_style_text_font(caption, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(caption, lv_color_hex(kColorControlText), 0);
+    lv_obj_center(caption);
+    factoryResetStatus = makeLabel(factoryResetOverlay, "", 348, 318,
+                                   &lv_font_montserrat_14, kColorMuted);
+    lv_obj_set_width(factoryResetStatus, 420);
+  }
+  lv_label_set_text(factoryResetStatus, "");
+  lv_obj_remove_flag(factoryResetOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(factoryResetOverlay);
+}
+
 void createSettingsOverlay() {
   settingsOverlay = createPageOverlay("System Configuration");
   lv_obj_add_flag(settingsOverlay, LV_OBJ_FLAG_SCROLLABLE);
@@ -3123,6 +3343,28 @@ void createSettingsOverlay() {
   makeLabel(updateCard, "Install firmware from a browser over Wi-Fi", 20, 40,
             &lv_font_montserrat_12, kColorMuted);
   lv_obj_add_event_cb(updateCard, showFirmwareUpdate, LV_EVENT_CLICKED, nullptr);
+
+  auto* pairingCard = makeCard(settingsOverlay, 16, 700, 768, 74);
+  lv_obj_add_flag(pairingCard, LV_OBJ_FLAG_CLICKABLE);
+  makeIconCircle(pairingCard, 16, 11, 52, LV_SYMBOL_BLUETOOTH,
+                 &lv_font_montserrat_24, kColorCyan);
+  makeLabel(pairingCard, "Pair another touchscreen", 84, 13,
+            &lv_font_montserrat_18, kColorText);
+  pairingStatusLabel = makeLabel(pairingCard,
+      "Lets a new touchscreen connect to the Controller for 2 minutes",
+      84, 40, &lv_font_montserrat_12, kColorMuted);
+  lv_obj_set_width(pairingStatusLabel, 620);
+  lv_obj_add_event_cb(pairingCard, pairTouchscreenClicked, LV_EVENT_CLICKED, nullptr);
+
+  auto* resetCard = makeCard(settingsOverlay, 16, 782, 768, 74);
+  lv_obj_add_flag(resetCard, LV_OBJ_FLAG_CLICKABLE);
+  makeIconCircle(resetCard, 16, 11, 52, LV_SYMBOL_TRASH,
+                 &lv_font_montserrat_24, kColorRed);
+  makeLabel(resetCard, "Factory reset", 84, 13, &lv_font_montserrat_18, kColorText);
+  makeLabel(resetCard, "Erase all settings on the touchscreen and the Controller",
+            84, 40, &lv_font_montserrat_12, kColorMuted);
+  makeLabel(resetCard, LV_SYMBOL_RIGHT, 724, 26, &lv_font_montserrat_18, kColorMuted);
+  lv_obj_add_event_cb(resetCard, openFactoryReset, LV_EVENT_CLICKED, nullptr);
 
   camperPositionOverlay = createPageOverlay("Camper Position");
   makeLabel(camperPositionOverlay, "Level calibration", 18, 55,
@@ -3358,6 +3600,30 @@ void createLabelConfigurationOverlays() {
   lv_obj_set_style_text_font(saveLabel, &lv_font_montserrat_18, 0);
   lv_obj_set_style_text_color(saveLabel, lv_color_hex(kColorControlText), 0);
   lv_obj_center(saveLabel);
+
+  labelEditorChannelsRow = lv_obj_create(labelEditorOverlay);
+  lv_obj_remove_style_all(labelEditorChannelsRow);
+  lv_obj_set_pos(labelEditorChannelsRow, 20, 146);
+  lv_obj_set_size(labelEditorChannelsRow, 760, 40);
+  lv_obj_remove_flag(labelEditorChannelsRow, LV_OBJ_FLAG_SCROLLABLE);
+  const char* outputNames[] = {"Colour (RGB)", "Warm white", "Cool white"};
+  for (uint8_t i = 0; i < 3; ++i) {
+    makeLabel(labelEditorChannelsRow, outputNames[i], i * 200, 10,
+              &lv_font_montserrat_14, kColorText);
+    lv_obj_t* toggle = lv_switch_create(labelEditorChannelsRow);
+    lv_obj_set_pos(toggle, i * 200 + 112, 6);
+    lv_obj_set_size(toggle, 52, 28);
+    lv_obj_set_style_bg_color(toggle, lv_color_hex(kColorBorder), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(toggle, lv_color_hex(kColorLightbulb), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(toggle, lv_color_hex(kColorText), LV_PART_KNOB);
+    lv_obj_add_event_cb(toggle, lightOutputSwitchChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+    labelEditorChannelSwitches[i] = toggle;
+  }
+  lv_obj_t* outputsNote = makeLabel(labelEditorChannelsRow,
+      "Saving a change restarts\nthe Controller once", 600, 2,
+      &lv_font_montserrat_12, kColorMuted);
+  lv_obj_set_width(outputsNote, 160);
+  lv_obj_add_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN);
 
   labelEditorKeyboard = lv_keyboard_create(labelEditorOverlay);
   // lv_keyboard defaults to bottom alignment. Reset that alignment explicitly;
@@ -3617,12 +3883,12 @@ void buildUi() {
   favoriteButtons[0] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory1].icon].symbol,
       deviceLabels[kLabelAccessory1].value, 168, 225, 142, 158,
-      BlueSquidControl::Command::SetUsb, kColorCyan, &favoriteStateLabels[0],
+      BlueSquidControl::Command::SetUsb, kColorAmber, &favoriteStateLabels[0],
       &favoriteTitleLabels[0], &favoriteIconLabels[0]);
   favoriteButtons[1] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory2].icon].symbol,
       deviceLabels[kLabelAccessory2].value, 320, 225, 142, 158,
-      BlueSquidControl::Command::SetPump, kColorCyan, &favoriteStateLabels[1],
+      BlueSquidControl::Command::SetPump, kColorAmber, &favoriteStateLabels[1],
       &favoriteTitleLabels[1], &favoriteIconLabels[1]);
   favoriteButtons[2] = addToggle(
       home, kDeviceIcons[deviceLabels[kLabelAccessory3].icon].symbol,
@@ -3663,12 +3929,12 @@ void buildUi() {
   controlButtons[0] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory1].icon].symbol,
       deviceLabels[kLabelAccessory1].value, 16, 147, 180, 200,
-      BlueSquidControl::Command::SetUsb, kColorCyan, &controlStateLabels[0],
+      BlueSquidControl::Command::SetUsb, kColorAmber, &controlStateLabels[0],
       &controlTitleLabels[0], &controlIconLabels[0]);
   controlButtons[1] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory2].icon].symbol,
       deviceLabels[kLabelAccessory2].value, 206, 147, 180, 200,
-      BlueSquidControl::Command::SetPump, kColorCyan, &controlStateLabels[1],
+      BlueSquidControl::Command::SetPump, kColorAmber, &controlStateLabels[1],
       &controlTitleLabels[1], &controlIconLabels[1]);
   controlButtons[2] = addToggle(
       controls, kDeviceIcons[deviceLabels[kLabelAccessory3].icon].symbol,
@@ -3918,11 +4184,11 @@ void refreshUi() {
   refreshFanCard(online);
   const bool outputStates[] = {status.usb, status.pump, status.accessory3,
                                status.accessory4};
-  const uint32_t accents[] = {kColorCyan, kColorCyan, kColorAmber, kColorAmber};
   for (int i = 0; i < 4; ++i) {
+    const uint32_t accent = defaultDeviceColour(kLabelAccessory1 + i);
     const bool displayed = displayState(pendingOutputs[i], outputStates[i]);
-    syncButton(favoriteButtons[i], favoriteStateLabels[i], displayed, accents[i]);
-    syncButton(controlButtons[i], controlStateLabels[i], displayed, accents[i]);
+    syncButton(favoriteButtons[i], favoriteStateLabels[i], displayed, accent);
+    syncButton(controlButtons[i], controlStateLabels[i], displayed, accent);
   }
   syncMainLightButtons(
       displayState(pendingAllLights,
@@ -3949,8 +4215,9 @@ void refreshUi() {
     setActionAvailable(favoriteButtons[output], available);
     setActionAvailable(controlButtons[output], available);
     if (!available) {
-      syncButton(favoriteButtons[output], favoriteStateLabels[output], false, accents[output]);
-      syncButton(controlButtons[output], controlStateLabels[output], false, accents[output]);
+      const uint32_t accent = defaultDeviceColour(kLabelAccessory1 + output);
+      syncButton(favoriteButtons[output], favoriteStateLabels[output], false, accent);
+      syncButton(controlButtons[output], controlStateLabels[output], false, accent);
       lv_label_set_text(favoriteStateLabels[output], "Unavailable");
       lv_label_set_text(controlStateLabels[output], "Unavailable");
     }
@@ -3996,7 +4263,10 @@ String remoteStatus() {
     JsonObject item=doc["rgb"][i].to<JsonObject>();
     add(item,deviceLabels[kLabelRgbwLight1+i].value,displayState(pendingZones[i], colour||channels[3]),status.outputAvailable(i),displayLevel(pendingBrightness[i], status.rgbwBrightness[i]));
     item["full"]=fullLightType(i);
-    item["rgbOnly"]=rgbOnlyLightType(i);
+    const uint8_t wired = lightCapabilities(i);
+    item["hasColour"]=(wired & Sp630eChannels::kColour) != 0;
+    item["hasWarm"]=(wired & Sp630eChannels::kWarmWhite) != 0;
+    item["hasCool"]=(wired & Sp630eChannels::kCoolWhite) != 0;
     item["colour"]=displayState(pendingColorEnabled[i], colour);
     const bool white = displayState(pendingWhiteEnabled[i], channels[3] > 0);
     const uint8_t tone = displayLevel(pendingWhiteTone[i], status.rgbwOptions[i] & 6);
@@ -4022,10 +4292,12 @@ bool remoteCommand(const String& kind,uint8_t target,uint32_t value) {
         const uint8_t options=value?rememberedZoneOptions[target]:0;
         desiredColorEnabled[target]=options&1;desiredWhiteEnabled[target]=options&6;
         desiredWhiteTone[target]=options&6;
-      } else if(kind=="rgbColour" && value<=1) desiredColorEnabled[target]=value;
-      else if((kind=="rgbWhite" || kind=="rgbCoolWhite") && value<=1) {
-        if (rgbOnlyLightType(target)) return false;
+      } else if(kind=="rgbColour" && value<=1) {
+        if (!(lightCapabilities(target) & Sp630eChannels::kColour)) return false;
+        desiredColorEnabled[target]=value;
+      } else if((kind=="rgbWhite" || kind=="rgbCoolWhite") && value<=1) {
         const uint8_t bit=kind=="rgbWhite" ? 2 : 4;
+        if (!(lightCapabilities(target) & bit)) return false;
         desiredWhiteTone[target]=value ? desiredWhiteTone[target]|bit : desiredWhiteTone[target]&~bit;
         desiredWhiteEnabled[target]=desiredWhiteTone[target]!=0;
       }
@@ -4038,6 +4310,7 @@ bool remoteCommand(const String& kind,uint8_t target,uint32_t value) {
           desiredWhiteTone[target]=rememberedZoneOptions[target]&6;
         }
       } else if(kind=="rgbHex" && value<=0xffffff) {
+        if (!(lightCapabilities(target) & Sp630eChannels::kColour)) return false;
         selectedRgb[target][0]=((value>>16)*100+127)/255;
         selectedRgb[target][1]=(((value>>8)&255)*100+127)/255;
         selectedRgb[target][2]=((value&255)*100+127)/255;

@@ -165,11 +165,13 @@ void manager() {
   manager.availability(assigned, available);
   assert(assigned == 1 && available == 0);
   RgbwBleDriverState off{}; off.color[0] = 100; off.brightness = 50; off.options = 1;
-  adapter.report(off); manager.update();
-  assert(outputs.value.rgbw[0][0] == 0 && outputs.value.rgbwBrightness[0] == 50);
+  adapter.report(off); assert(manager.update());
+  // Off feedback clears outputs but does not replace the saved on preset.
+  assert(outputs.value.rgbw[0][0] == 0 && outputs.value.rgbwBrightness[0] == 100);
+  assert(outputs.value.rgbwOptions[0] == 2);
   assert(adapter.sends == 0);
   const unsigned changes = outputs.changes;
-  adapter.report(off); clockMs += 2000; manager.update();
+  adapter.report(off); clockMs += 2000; assert(!manager.update());
   assert(outputs.changes == changes && adapter.sends == 0);
   // A newly received older report cannot overwrite an outbound user change.
   outputs.setRgbwChannel(RgbwZone::Output1, 0, 50);
@@ -194,6 +196,14 @@ void sharedAssignments() {
   RgbwBleDriverState state{}; state.channels[0] = 30; state.channels[3] = 75;
   state.color[0] = 100; state.brightness = 75; state.options = 3;
   other.report(state);
+  // After a Controller restart, the module may still drive the pump. Its
+  // report must not turn the pump on; the restored safe state is sent first.
+  adapter.report(state); manager.update();
+  assert(!outputs.value.waterPumpEnabled && other.sends == 0);
+  clockMs += 101; manager.update();
+  assert(adapter.sends == 1 && adapter.sent.channels[3] == 0);
+  assert(!outputs.value.waterPumpEnabled);
+  // Later feedback is the module's real state and is adopted.
   adapter.report(state); manager.update();
   assert(outputs.value.rgbw[2][3] == 30 && outputs.value.waterPumpEnabled);
   const unsigned changes = outputs.changes;
@@ -421,10 +431,58 @@ void whiteOnlyRetainsColour() {
   assert(outputs.value.rgbw[0][3] == 0 && outputs.value.rgb[0][0] == 100);
   assert(adapter.sends == 0); // Feedback must not echo a new output command.
 }
+void wiredOutputCombinations() {
+  // RGB + cool white: a warm-white group request uses cool white.
+  {
+    OutputController outputs; Adapter adapter; RgbwBleDriverManager manager(outputs);
+    manager.setAdapter(0, &adapter, Sp630eChannels::fullStripChannel(5)); manager.begin();
+    outputs.value.rgbw[0][3] = 80; outputs.value.rgbwOptions[0] = 2;
+    manager.update(); clockMs += 101; manager.update();
+    assert(adapter.sent.channels[3] == 0 && adapter.sent.channels[4] == 80);
+    assert(adapter.sent.channels[0] == 0 && adapter.sent.options == 2);
+    // Warm-white feedback from an output marked not wired is ignored.
+    RgbwBleDriverState state{}; state.channels[3] = 50; state.channels[4] = 70;
+    state.brightness = 70; state.options = 2;
+    adapter.report(state); manager.update();
+    assert(outputs.value.rgbw[0][3] == 70 && outputs.value.rgbwOptions[0] == 4);
+  }
+  // Warm white only: colour is never driven, white stays warm.
+  {
+    OutputController outputs; Adapter adapter; RgbwBleDriverManager manager(outputs);
+    manager.setAdapter(0, &adapter, Sp630eChannels::fullStripChannel(2)); manager.begin();
+    outputs.value.rgbw[0][0] = 100; outputs.value.rgbw[0][3] = 40;
+    outputs.value.rgbwOptions[0] = 3;
+    manager.update(); clockMs += 101; manager.update();
+    assert(adapter.sent.channels[0] == 0 && adapter.sent.channels[3] == 40);
+    assert(adapter.sent.channels[4] == 0 && adapter.sent.options == 2);
+  }
+  // All outputs (the original full strip) is unchanged: both whites follow
+  // their own selections.
+  {
+    OutputController outputs; Adapter adapter; RgbwBleDriverManager manager(outputs);
+    manager.setAdapter(0, &adapter, 255); manager.begin();
+    outputs.value.rgbw[0][1] = 30; outputs.value.rgbw[0][3] = 60;
+    outputs.value.rgbwOptions[0] = 7;
+    manager.update(); clockMs += 101; manager.update();
+    assert(adapter.sent.channels[1] == 30 && adapter.sent.channels[3] == 60);
+    assert(adapter.sent.channels[4] == 60 && adapter.sent.options == 3);
+  }
+}
 void configurableLightTypes() {
-  assert(Sp630eChannels::lightChannel(0) == 255);
+  // "Full RGB" starts as RGB only and keeps an existing full strip's outputs.
+  assert(Sp630eChannels::lightChannel(0) == Sp630eChannels::rgbOnly);
+  assert(Sp630eChannels::lightChannel(0, 255) == 255 && Sp630eChannels::lightChannel(0, 0xF5) == 0xF5);
+  assert(Sp630eChannels::lightChannel(0, 3) == Sp630eChannels::rgbOnly);
   for (uint8_t choice = 0; choice < Sp630eChannels::lightChoiceCount; ++choice)
     assert(Sp630eChannels::lightPosition(Sp630eChannels::lightChannel(choice)) == choice);
+  // Original IDs keep their meaning; every combination round-trips.
+  assert(Sp630eChannels::capabilities(255) == 7 && Sp630eChannels::capabilities(254) == 1);
+  assert(Sp630eChannels::capabilities(3) == 0 && !Sp630eChannels::colourType(0xF0));
+  for (uint8_t caps = 1; caps <= 7; ++caps) {
+    const uint8_t channel = Sp630eChannels::fullStripChannel(caps);
+    assert(Sp630eChannels::colourType(channel) && Sp630eChannels::capabilities(channel) == caps);
+    assert(channel > 4);
+  }
   // Three lights share independently assigned channels.
   OutputController outputs; Adapter adapter; RgbwBleDriverManager manager(outputs);
   manager.setAdapter(0, &adapter, 4);
@@ -809,4 +867,4 @@ int main() {
   assert(!Sp630eProtocol::pollDue(2000, 0, true));
   assert(Sp630eProtocol::pollDue(4000, 0, true));
   assert(Sp630eProtocol::pollDue(1999, UINT32_MAX, false));
- pwmRgbHardware(); rgbOnlyAssignment(); independentRelayDoesNotWakeEachTime(); relayDoesNotRescaleDimmedGreen(); sharedRelayWakeDoesNotRestoreGreen(); wakeAppliesModeAfterPower(); offToColourStaysColour(); independentLedSelections(); offToWhiteStaysWhite(); configurableLightTypes(); coolWhiteFeedback(); whiteOnlyRetainsColour(); fullColourWheel(); separateWhiteAssignments(); singleChannelRouting(); warmWhiteIntensitySweep(); changedPacketsOnly(); continuousGesturesAreNotStarved(); protocol(); rgbWarm(); rapidChangesKeepLinkAlive(); manager(); sharedAssignments(); puts("SP630E tests passed"); }
+ pwmRgbHardware(); rgbOnlyAssignment(); independentRelayDoesNotWakeEachTime(); relayDoesNotRescaleDimmedGreen(); sharedRelayWakeDoesNotRestoreGreen(); wakeAppliesModeAfterPower(); offToColourStaysColour(); independentLedSelections(); offToWhiteStaysWhite(); configurableLightTypes(); wiredOutputCombinations(); coolWhiteFeedback(); whiteOnlyRetainsColour(); fullColourWheel(); separateWhiteAssignments(); singleChannelRouting(); warmWhiteIntensitySweep(); changedPacketsOnly(); continuousGesturesAreNotStarved(); protocol(); rgbWarm(); rapidChangesKeepLinkAlive(); manager(); sharedAssignments(); puts("SP630E tests passed"); }

@@ -60,6 +60,9 @@ class TouchBleClientCallbacks final : public NimBLEClientCallbacks {
 
 bool TouchBleClient::begin() {
   activeClient = this;
+  // The Controller sends acknowledgements to every connected touchscreen.
+  // Random starting points keep two touchscreens from sharing sequences.
+  commandSequence_ = static_cast<uint16_t>(esp_random() | 1U);
   NimBLEDevice::init(kTouchDeviceName);
   // Observe the actual GAP reason; getLastError() is not the disconnect reason.
   NimBLEDevice::setCustomGapHandler([](ble_gap_event* event, void*) -> int {
@@ -135,7 +138,18 @@ void TouchBleClient::foundRear(NimBLEAdvertisedDevice* device) {
   Serial.println("BLE controller advertisement found");
 }
 
+void TouchBleClient::restartQuietly() {
+  // Restarting during an active scan intermittently panicked inside the
+  // restart itself. Stop radio activity without waiting on GATT work, which
+  // may be the reason for this restart.
+  NimBLEDevice::getScan()->stop();
+  delay(100);
+  ESP.restart();
+}
+
 void TouchBleClient::updateConnection() {
+  static_assert(MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL) == 20,
+                "Touchscreen BLE requires prompt receive-credit returns");
   if (!initialized_) return;
   const uint32_t now = millis();
   const bool connecting = connectionInProgress_.load();
@@ -151,7 +165,7 @@ void TouchBleClient::updateConnection() {
   if (recovery == BleReconnectWatchdog::Action::Restart) {
     // Never delete a blocked NimBLE task: it may still own stack-backed GATT state.
     Serial.printf("BLE reconnect cancellation stuck at %s for 30 seconds; restarting touchscreen\n", connectionStage_.load());
-    ESP.restart();
+    restartQuietly();
     return;
   }
   if (recovery == BleReconnectWatchdog::Action::Disconnect) {
@@ -169,7 +183,7 @@ void TouchBleClient::updateConnection() {
   if (discoveryAction == BleDiscoveryRecovery::Action::Restart) {
     discoveryRestartUsed = true;
     Serial.println("BLE discovery recovery exhausted after 120 seconds; restarting touchscreen once");
-    ESP.restart();
+    restartQuietly();
     return;
   }
   if (discoveryAction == BleDiscoveryRecovery::Action::RetryAddress) {
@@ -321,9 +335,9 @@ bool TouchBleClient::connectToRear() {
     if (client_ == nullptr) return false;
     client_->setClientCallbacks(new TouchBleClientCallbacks(*this), true);
   }
-  // Keep 15–30 ms timing while awake, asleep and discovering services.
-  // Sleep-time renegotiation was followed by link loss and very slow discovery.
-  client_->setConnectionParams(12, 24, 0, 300);
+  // Match the SP630E links on the Controller's shared radio. Keep this
+  // interval while awake, asleep and discovering services.
+  client_->setConnectionParams(32, 32, 0, 300);
   client_->setConnectTimeout(4);
   setConnectionStage("connecting");
   Serial.println("BLE controller stage: connecting");
@@ -424,6 +438,7 @@ void TouchBleClient::disconnected() {
   for (uint8_t zone = 0; zone < 4; ++zone) {
     rgbwPending_[zone] = false;
     rgbwAwaitingAck_[zone] = false;
+    rgbwSnapshotGate_[zone] = {};
   }
   lastConnectAttemptMs_ = millis();
 }
@@ -587,11 +602,21 @@ void TouchBleClient::discoveryNotification(NimBLERemoteCharacteristic*,
                                             uint8_t* data, size_t length,
                                             bool) {
   if (activeClient == nullptr || data == nullptr) return;
-  activeClient->sp630ePayload_ = String();
-  activeClient->sp630ePayload_.reserve(length);
-  for (size_t index = 0; index < length; ++index)
-    activeClient->sp630ePayload_ += static_cast<char>(data[index]);
+  const size_t count = length < sizeof(activeClient->sp630ePayload_)
+      ? length : sizeof(activeClient->sp630ePayload_) - 1;
+  portENTER_CRITICAL(&activeClient->payloadMux_);
+  memcpy(activeClient->sp630ePayload_, data, count);
+  activeClient->sp630ePayload_[count] = '\0';
+  portEXIT_CRITICAL(&activeClient->payloadMux_);
   ++activeClient->sp630ePayloadRevision_;
+}
+
+String TouchBleClient::sp630ePayload() const {
+  char copy[sizeof(sp630ePayload_)];
+  portENTER_CRITICAL(&payloadMux_);
+  memcpy(copy, sp630ePayload_, sizeof(copy));
+  portEXIT_CRITICAL(&payloadMux_);
+  return String(copy);
 }
 
 bool TouchBleClient::send(BlueSquidControl::Command command, uint8_t target,
@@ -600,8 +625,8 @@ bool TouchBleClient::send(BlueSquidControl::Command command, uint8_t target,
     const uint8_t zone = target >> 4;
     const uint8_t channel = target & 0x0F;
     if (!connected() || zone > 3 || channel > 3 || value > 100) return false;
-    uint8_t* channels = status_.rgbwChannels(zone);
-    channels[channel] = static_cast<uint8_t>(value);
+    prepareRgbwState(zone);
+    rgbwRequested_[zone].channels[channel] = static_cast<uint8_t>(value);
     if (!rgbwPending_[zone]) rgbwChangedMs_[zone] = millis();
     rgbwPending_[zone] = true;
     return true;
@@ -610,18 +635,26 @@ bool TouchBleClient::send(BlueSquidControl::Command command, uint8_t target,
     const uint8_t zone = target >> 4;
     const uint8_t field = target & 0x0F;
     if (!connected() || zone > 3 || field > 4 || value > 100) return false;
+    prepareRgbwState(zone);
     if (field < 3)
-      status_.rgb[zone][field] = static_cast<uint8_t>(value);
+      rgbwRequested_[zone].colour[field] = static_cast<uint8_t>(value);
     else if (field == 3)
-      status_.rgbwBrightness[zone] = static_cast<uint8_t>(value);
+      rgbwRequested_[zone].brightness = static_cast<uint8_t>(value);
     else
-      status_.rgbwOptions[zone] = static_cast<uint8_t>(value);
-    status_.rgbwPresetValid[zone] = true;
+      rgbwRequested_[zone].options = static_cast<uint8_t>(value);
     if (!rgbwPending_[zone]) rgbwChangedMs_[zone] = millis();
     rgbwPending_[zone] = true;
     return true;
   }
   return sendValueCommand(command, target, value);
+}
+
+bool TouchBleClient::requestAction(BlueSquidControl::Command command,
+                                   uint16_t value) {
+  actionResult_.store(0);
+  actionCommand_.store(static_cast<uint8_t>(command));
+  actionSequence_.store(commandSequence_);
+  return sendValueCommand(command, 0, value);
 }
 
 bool TouchBleClient::sendValueCommand(BlueSquidControl::Command command,
@@ -631,6 +664,15 @@ bool TouchBleClient::sendValueCommand(BlueSquidControl::Command command,
   const size_t length = BlueSquidBle::encodeValueCommand(
       commandSequence_++, command, target, value, packet);
   return commandCharacteristic_->writeValue(packet, length, false);
+}
+
+void TouchBleClient::prepareRgbwState(uint8_t zone) {
+  if (rgbwPending_[zone] || rgbwAwaitingAck_[zone] || rgbwSnapshotGate_[zone].waiting) return;
+  auto& request = rgbwRequested_[zone];
+  memcpy(request.channels, status_.rgbw[zone], 4);
+  memcpy(request.colour, status_.rgb[zone], 3);
+  request.brightness = status_.rgbwBrightness[zone];
+  request.options = status_.rgbwOptions[zone];
 }
 
 bool TouchBleClient::sendRgbwState(uint8_t zone) {
@@ -643,12 +685,12 @@ bool TouchBleClient::sendRgbwState(uint8_t zone) {
   packet[3] = static_cast<uint8_t>(BlueSquidControl::Command::SetRgbwState);
   packet[4] = zone;
   packet[5] = 9;
-  const uint8_t* channels = status_.rgbwChannels(zone);
-  memcpy(packet + BlueSquidBle::kCommandHeaderSize, channels, 4);
-  memcpy(packet + BlueSquidBle::kCommandHeaderSize + 4, status_.rgb[zone], 3);
+  const auto& request = rgbwRequested_[zone];
+  memcpy(packet + BlueSquidBle::kCommandHeaderSize, request.channels, 4);
+  memcpy(packet + BlueSquidBle::kCommandHeaderSize + 4, request.colour, 3);
   packet[BlueSquidBle::kCommandHeaderSize + 7] =
-      status_.rgbwBrightness[zone];
-  packet[BlueSquidBle::kCommandHeaderSize + 8] = status_.rgbwOptions[zone];
+      request.brightness;
+  packet[BlueSquidBle::kCommandHeaderSize + 8] = request.options;
   rgbwAckStartedMs_[zone] = millis();
   rgbwAwaitingAck_[zone] = true;
   rgbwSequence_[zone] = sequence;
@@ -711,14 +753,17 @@ void TouchBleClient::processSnapshot(const uint8_t* data, size_t length) {
   status_.fanSource = data[BlueSquidBle::kSnapshotFanSource];
   status_.fanInstance = data[BlueSquidBle::kSnapshotFanInstance];
   status_.fanError = data[BlueSquidBle::kSnapshotFanError];
-  if (!rgbwPending_[0] && !rgbwAwaitingAck_[0]) {
+  const uint32_t revision = BlueSquidBle::readU32(data + BlueSquidBle::kSnapshotRevision);
+  uint8_t previousLights[4][4];
+  memcpy(previousLights, status_.rgbw, sizeof(previousLights));
+  if (!rgbwPending_[0] && !rgbwAwaitingAck_[0] && rgbwSnapshotGate_[0].accepts(revision)) {
     memcpy(status_.rgbw[0], data + BlueSquidBle::kSnapshotFrontRgbw, 4);
     memcpy(status_.rgb[0], data + BlueSquidBle::kSnapshotFrontPreset, 3);
     status_.rgbwBrightness[0] =
         data[BlueSquidBle::kSnapshotFrontPreset + 3];
     status_.rgbwOptions[0] = data[BlueSquidBle::kSnapshotFrontPreset + 4];
   }
-  if (!rgbwPending_[1] && !rgbwAwaitingAck_[1]) {
+  if (!rgbwPending_[1] && !rgbwAwaitingAck_[1] && rgbwSnapshotGate_[1].accepts(revision)) {
     memcpy(status_.rgbw[1], data + BlueSquidBle::kSnapshotRearRgbw, 4);
     memcpy(status_.rgb[1], data + BlueSquidBle::kSnapshotRearPreset, 3);
     status_.rgbwBrightness[1] =
@@ -726,7 +771,7 @@ void TouchBleClient::processSnapshot(const uint8_t* data, size_t length) {
     status_.rgbwOptions[1] = data[BlueSquidBle::kSnapshotRearPreset + 4];
   }
   for (uint8_t zone = 2; zone < 4; ++zone) {
-    if (rgbwPending_[zone] || rgbwAwaitingAck_[zone]) continue;
+    if (rgbwPending_[zone] || rgbwAwaitingAck_[zone] || !rgbwSnapshotGate_[zone].accepts(revision)) continue;
     const uint8_t* extra = data + BlueSquidBle::kSnapshotExtraRgbw + (zone - 2) * 9;
     memcpy(status_.rgbw[zone], extra, 4);
     memcpy(status_.rgb[zone], extra + 4, 3);
@@ -736,6 +781,13 @@ void TouchBleClient::processSnapshot(const uint8_t* data, size_t length) {
   }
   status_.rgbwPresetValid[0] = true;
   status_.rgbwPresetValid[1] = true;
+  for (uint8_t zone = 0; zone < 4; ++zone) {
+    if (memcmp(previousLights[zone], status_.rgbw[zone], 4) == 0) continue;
+    Serial.printf("BLE light %u snapshot revision=%lu RGB=%u,%u,%u W=%u options=%u available=%u\n",
+                  zone + 1, static_cast<unsigned long>(revision),
+                  status_.rgbw[zone][0], status_.rgbw[zone][1], status_.rgbw[zone][2],
+                  status_.rgbw[zone][3], status_.rgbwOptions[zone], status_.outputAvailable(zone));
+  }
   status_.voltage =
       BlueSquidBle::readU16(data + BlueSquidBle::kSnapshotVoltage) / 1000.0F;
   status_.current =
@@ -792,11 +844,23 @@ void TouchBleClient::processAck(const uint8_t* data, size_t length) {
                   static_cast<unsigned>(data[4]),
                   static_cast<unsigned long>(lastAckRevision_));
   }
+  if (data[3] == actionCommand_.load() &&
+      BlueSquidBle::readU16(data + 1) == actionSequence_.load()) {
+    actionResult_.store(
+        data[4] == static_cast<uint8_t>(BlueSquidBle::AckResult::Accepted) ? 1 : 2);
+  }
   if (data[3] ==
       static_cast<uint8_t>(BlueSquidControl::Command::SetRgbwState)) {
     const uint8_t zone = data[9];
     const uint16_t sequence = BlueSquidBle::readU16(data + 1);
     if (zone < 4 && rgbwSequence_[zone] == sequence) {
+      Serial.printf("BLE light %u ACK sequence=%u result=%u revision=%lu elapsed=%lu ms\n",
+                    zone + 1, sequence, data[4], static_cast<unsigned long>(lastAckRevision_),
+                    static_cast<unsigned long>(millis() - rgbwAckStartedMs_[zone]));
+      if (data[4] == static_cast<uint8_t>(BlueSquidBle::AckResult::Accepted))
+        rgbwSnapshotGate_[zone].expect(lastAckRevision_);
+      else
+        rgbwSnapshotGate_[zone] = {};
       rgbwAwaitingAck_[zone] = false;
       if (data[4] != static_cast<uint8_t>(
                          BlueSquidBle::AckResult::Accepted)) {

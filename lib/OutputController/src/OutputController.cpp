@@ -43,7 +43,11 @@ void OutputController::update() {
 
   if (savePending_ &&
       now - saveRequestedMs_ >= AppConfig::kDeviceStateSaveDelayMs) {
-    if (settingsManager_.saveDeviceState(deviceState_)) {
+    // Off is an output state, not a replacement for the next on selection.
+    auto saved = deviceState_;
+    for (uint8_t zone = 0; zone < kRgbwZoneCount; ++zone)
+      if (!saved.rgbwOptions[zone]) saved.rgbwOptions[zone] = rememberedRgbwOptions_[zone];
+    if (settingsManager_.saveDeviceState(saved)) {
       savePending_ = false;
     } else {
       saveRequestedMs_ = now;
@@ -69,9 +73,13 @@ void OutputController::setAllLightsEnabled(bool enabled) {
   for (uint8_t target = 0; target < 4; ++target) {
     if (!(lightGroupMask_ & (1U << target))) continue;
     if (rgbwLightConfigured(target)) {
-      const uint8_t channels[4] = {0, 0, 0, level};
-      const uint8_t white = deviceState_.rgbwOptions[target] & 6;
-      setRgbwState(static_cast<RgbwZone>(target), channels, deviceState_.rgb[target], 100, white ? white : 2);
+      const uint8_t options = rememberedRgbwOptions_[target];
+      uint8_t channels[4]{};
+      if (enabled && (options & 1))
+        memcpy(channels, deviceState_.rgb[target], 3);
+      if (options & 6) channels[3] = level;
+      setRgbwState(static_cast<RgbwZone>(target), channels,
+                   deviceState_.rgb[target], 100, options);
     }
   }
 }
@@ -120,6 +128,7 @@ bool OutputController::setRgbwPresetField(RgbwZone zone, uint8_t field,
     deviceState_.rgbwBrightness[zoneIndex] = value;
   } else {
     deviceState_.rgbwOptions[zoneIndex] = value;
+    if (value) rememberedRgbwOptions_[zoneIndex] = value;
   }
   rgbwPresetPending_[zoneIndex] = false;
   syncPresetStatus();
@@ -274,6 +283,9 @@ void OutputController::restoreDeviceState() {
     LOG_INFO(kTag, "No saved device state; using safe defaults");
   }
   sanitizeDeviceState();
+  for (uint8_t zone = 0; zone < kRgbwZoneCount; ++zone)
+    if (deviceState_.rgbwOptions[zone])
+      rememberedRgbwOptions_[zone] = deviceState_.rgbwOptions[zone];
   syncPresetStatus();
 
   restoring_ = true;
@@ -331,8 +343,11 @@ void OutputController::updateRgbwPresetFromOutputs(uint8_t zone) {
     }
   }
   deviceState_.rgbwBrightness[zone] = brightness;
+  // The white channel level does not say which white; keep the chosen tone.
+  const uint8_t whiteTone = rememberedRgbwOptions_[zone] & 6;
   deviceState_.rgbwOptions[zone] =
-      (colorLevel != 0 ? 1 : 0) | (values[3] != 0 ? 2 : 0);
+      (colorLevel != 0 ? 1 : 0) | (values[3] != 0 ? (whiteTone ? whiteTone : 2) : 0);
+  rememberedRgbwOptions_[zone] = deviceState_.rgbwOptions[zone];
   syncPresetStatus();
 }
 

@@ -4,6 +4,7 @@
 #include <NimBLEDevice.h>
 
 #include <math.h>
+#include <nvs_flash.h>
 
 #include "AppConfig.h"
 #include "BlueSquidBleProtocol.h"
@@ -106,6 +107,7 @@ class BleServerCallbacks final : public NimBLEServerCallbacks {
     LOG_INFO(kTag, "Connection %u secured (bonded=%s)",
              description->conn_handle,
              description->sec_state.bonded ? "yes" : "no");
+    manager_.requestClientVerification(description->conn_handle);
   }
 
  private:
@@ -157,9 +159,7 @@ class BleStatusCallbacks final : public NimBLECharacteristicCallbacks {
              description->conn_handle,
              subscriptionValue != 0 ? "enabled" : "disabled");
 
-    if (subscriptionValue != 0) {
-      manager_.publishLatestStatus();
-    }
+    if (subscriptionValue != 0) manager_.statusRefreshRequested_.store(true);
   }
 
  private:
@@ -195,9 +195,7 @@ class BleTouchSnapshotCallbacks final
     manager_.recordClientActivity(description->conn_handle);
     manager_.setClientPrimary(description->conn_handle,
                               subscriptionValue != 0);
-    if (subscriptionValue != 0 && manager_.hasLatestStatus_) {
-      manager_.publishTouchSnapshot(manager_.latestStatus_, true);
-    }
+    if (subscriptionValue != 0) manager_.statusRefreshRequested_.store(true);
   }
 
  private:
@@ -220,15 +218,8 @@ class BleConfigCallbacks final : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* characteristic,
                ble_gap_conn_desc* description) override {
     manager_.recordClientActivity(description->conn_handle);
-    const std::string value = characteristic->getValue();
-    if (value.rfind("sp630e.", 0) == 0)
-      manager_.setSp630eConfig(value);
-    else if (value.rfind("rvc.save=", 0) == 0)
-      manager_.setRvcFanConfig(value);
-    else if (value.rfind("wifi.ap=", 0) == 0)
-      manager_.setCerboWifiConfig(value);
-    else
-      manager_.setBatteryCapacityConfig(value);
+    manager_.queueConfigWrite(description->conn_handle, false,
+                              characteristic->getValue());
   }
 
  private:
@@ -236,14 +227,16 @@ class BleConfigCallbacks final : public NimBLECharacteristicCallbacks {
 };
 
 class BleOtaCredentialsCallbacks final : public NimBLECharacteristicCallbacks {
+ public:
+  explicit BleOtaCredentialsCallbacks(BleManager& manager) : manager_(manager) {}
   void onRead(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
     uint8_t ack[4]{};
-    if (description && description->sec_state.encrypted)
+    if (description && manager_.clientTrusted(description->conn_handle))
       OtaCredentials::writeId(ack, FirmwareUpdate::credentialsAcknowledgement());
     characteristic->setValue(ack, sizeof(ack));
   }
   void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
-    if (!description || !description->sec_state.encrypted) return;
+    if (!description || !manager_.clientTrusted(description->conn_handle)) return;
     const std::string bytes = characteristic->getValue();
     OtaCredentials::Value value;
     uint32_t id = 0;
@@ -254,25 +247,29 @@ class BleOtaCredentialsCallbacks final : public NimBLECharacteristicCallbacks {
     OtaCredentials::writeId(ack, FirmwareUpdate::credentialsAcknowledgement());
     characteristic->setValue(ack, sizeof(ack));
   }
+ private:
+  BleManager& manager_;
 };
 
 class BleOtaLinkCallbacks final : public NimBLECharacteristicCallbacks {
  public:
-  explicit BleOtaLinkCallbacks(CerboWifiManager& wifi) : wifi_(wifi) {}
+  explicit BleOtaLinkCallbacks(BleManager& manager)
+      : manager_(manager), wifi_(manager.cerboWifi_) {}
   void onRead(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
-    if (!description || !description->sec_state.encrypted) return;
+    if (!description || !manager_.clientTrusted(description->conn_handle)) return;
     uint8_t bytes[OtaLink::kStatusSize]{};
     OtaLink::encode(bytes, wifi_.updateNetworkStatus());
     characteristic->setValue(bytes, sizeof(bytes));
   }
   void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
-    if (!description || !description->sec_state.encrypted) return;
+    if (!description || !manager_.clientTrusted(description->conn_handle)) return;
     const auto bytes = characteristic->getValue();
     if (bytes.size() == 5 && static_cast<uint8_t>(bytes[0]) <= 1)
       wifi_.requestUpdateNetwork(bytes[0] != 0, OtaCredentials::readId(
           reinterpret_cast<const uint8_t*>(bytes.data()) + 1));
   }
  private:
+  BleManager& manager_;
   CerboWifiManager& wifi_;
 };
 
@@ -280,37 +277,12 @@ class BleDiscoveryCallbacks final : public NimBLECharacteristicCallbacks {
  public:
   explicit BleDiscoveryCallbacks(BleManager& manager) : manager_(manager) {}
 
-  void onRead(NimBLECharacteristic* characteristic,
-              ble_gap_conn_desc* description) override {
-    manager_.recordClientActivity(description->conn_handle);
-    characteristic->setValue(manager_.latestDiscoveryPayload_.c_str());
-  }
-
+  // Reads return the value the main loop last stored with setValue().
   void onWrite(NimBLECharacteristic* characteristic,
                ble_gap_conn_desc* description) override {
     manager_.recordClientActivity(description->conn_handle);
-    if (characteristic->getValue() == "sp630e")
-      manager_.requestSp630eDiscovery();
-    else if (characteristic->getValue() == "sp630e.config") {
-      manager_.latestDiscoveryPayload_ = manager_.sp630eConfig();
-      characteristic->setValue(manager_.latestDiscoveryPayload_.c_str());
-      characteristic->notify(
-          reinterpret_cast<const uint8_t*>(
-              manager_.latestDiscoveryPayload_.c_str()),
-          manager_.latestDiscoveryPayload_.length());
-    } else if (characteristic->getValue() == "rvc.config") {
-      manager_.latestDiscoveryPayload_ = manager_.rvcFanConfig();
-      characteristic->setValue(manager_.latestDiscoveryPayload_.c_str());
-      characteristic->notify();
-    } else if (characteristic->getValue() == "wifi.config") {
-      manager_.latestDiscoveryPayload_ = manager_.cerboWifiConfig();
-      characteristic->setValue(manager_.latestDiscoveryPayload_.c_str());
-      characteristic->notify(
-          reinterpret_cast<const uint8_t*>(manager_.latestDiscoveryPayload_.c_str()),
-          manager_.latestDiscoveryPayload_.length());
-    } else {
-      LOG_WARN(kTag, "Rejected unknown discovery request");
-    }
+    manager_.queueConfigWrite(description->conn_handle, true,
+                              characteristic->getValue());
   }
 
  private:
@@ -331,6 +303,8 @@ BleManager::BleManager(EventManager& eventManager,
       cerboWifi_(cerboWifi) {}
 
 bool BleManager::begin() {
+  static_assert(MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL) == 20,
+                "Multi-link BLE requires prompt receive-credit returns");
   char deviceName[24] = {};
   const uint16_t deviceSuffix = static_cast<uint16_t>(ESP.getEfuseMac());
   snprintf(deviceName, sizeof(deviceName), "%s-%04X",
@@ -338,6 +312,7 @@ bool BleManager::begin() {
 
   NimBLEDevice::init(deviceName);
   NimBLEDevice::setMTU(Sp630eProtocol::kPreferredMtu);
+  LOG_INFO(kTag, "BLE receive-credit interval: %u ms", MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL));
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   // Bonding plus Secure Connections prevents a new unauthenticated client
   // from silently replacing the installed touchscreen.  With no keyboard or
@@ -345,6 +320,10 @@ bool BleManager::begin() {
   NimBLEDevice::setSecurityAuth(true, false, true);
   const int bondCount = NimBLEDevice::getNumBonds();
   LOG_INFO(kTag, "Retaining %d BLE bond(s)", bondCount);
+  bondGuard_.begin();
+
+  configWrites_ = xQueueCreate(4, sizeof(ConfigWrite));
+  if (configWrites_ == nullptr) LOG_WARN(kTag, "Configuration queue unavailable");
 
   server_ = NimBLEDevice::createServer();
   server_->setCallbacks(new BleServerCallbacks(*this));
@@ -352,17 +331,19 @@ bool BleManager::begin() {
   NimBLEService* service = server_->createService(AppConfig::Ble::kServiceUuid);
   statusCharacteristic_ = service->createCharacteristic(
       AppConfig::Ble::kStatusUuid,
-      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
+          NIMBLE_PROPERTY::READ_ENC);
   statusCharacteristic_->setCallbacks(new BleStatusCallbacks(*this));
 
   NimBLECharacteristic* commandCharacteristic = service->createCharacteristic(
       AppConfig::Ble::kCommandUuid,
-      NIMBLE_PROPERTY::WRITE);
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
   commandCharacteristic->setCallbacks(new BleCommandCallbacks(*this));
 
   configCharacteristic_ = service->createCharacteristic(
       AppConfig::Ble::kConfigUuid,
-      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
+          NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
   char capacityConfig[24] = {};
   snprintf(capacityConfig, sizeof(capacityConfig), "capacityAh=%.1f",
            batteryManager_.capacityAh());
@@ -372,20 +353,21 @@ bool BleManager::begin() {
   discoveryCharacteristic_ = service->createCharacteristic(
       AppConfig::Ble::kBmsDiscoveryUuid,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
-          NIMBLE_PROPERTY::NOTIFY);
+          NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC |
+          NIMBLE_PROPERTY::WRITE_ENC);
   discoveryCharacteristic_->setValue("");
   discoveryCharacteristic_->setCallbacks(new BleDiscoveryCallbacks(*this));
 
   NimBLECharacteristic* otaCredentials = service->createCharacteristic(
       OtaCredentials::kUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
           NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
-  otaCredentials->setCallbacks(new BleOtaCredentialsCallbacks());
+  otaCredentials->setCallbacks(new BleOtaCredentialsCallbacks(*this));
   const uint8_t emptyAck[4]{};
   otaCredentials->setValue(emptyAck, sizeof(emptyAck));
   auto* otaLink = service->createCharacteristic(OtaLink::kUuid,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
       NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
-  otaLink->setCallbacks(new BleOtaLinkCallbacks(cerboWifi_));
+  otaLink->setCallbacks(new BleOtaLinkCallbacks(*this));
   service->start();
 
   NimBLEService* touchService =
@@ -445,8 +427,18 @@ void BleManager::update() {
           latestDiscoveryPayload_.length());
   }
 
+  // Decide trust before running anything a new connection has queued.
+  verifyClients();
+  processConfigWrites();
+  if (statusRefreshRequested_.exchange(false)) publishLatestStatus();
+
   PendingCommand command;
   while (dequeueCommand(command)) {
+    if (!clientTrusted(command.connectionHandle)) {
+      LOG_WARN(kTag, "Ignored command from untrusted connection %u",
+               command.connectionHandle);
+      continue;
+    }
     processCommand(command.connectionHandle, command.opcode, command.value);
   }
   processTouchCommand();
@@ -456,6 +448,72 @@ void BleManager::update() {
     delay(150);
     ESP.restart();
   }
+  // Give the acknowledgement time to reach the touchscreen, which erases
+  // itself only after this Controller confirms.
+  if (factoryResetRequested_ && millis() - factoryResetRequestedMs_ >= 1000) {
+    LOG_WARN(kTag, "Factory reset: erasing all settings and pairings");
+    nvs_flash_erase();
+    delay(150);
+    ESP.restart();
+  }
+}
+
+void BleManager::queueConfigWrite(uint16_t connectionHandle, bool discovery,
+                                  const std::string& value) {
+  ConfigWrite write;
+  write.connectionHandle = connectionHandle;
+  write.discovery = discovery;
+  if (configWrites_ == nullptr || value.size() >= sizeof(write.text)) {
+    LOG_WARN(kTag, "Rejected configuration write (%u bytes)",
+             static_cast<unsigned>(value.size()));
+    return;
+  }
+  memcpy(write.text, value.data(), value.size());
+  if (xQueueSend(configWrites_, &write, 0) != pdTRUE)
+    LOG_WARN(kTag, "Configuration queue full; write discarded");
+}
+
+void BleManager::processConfigWrites() {
+  ConfigWrite write;
+  while (configWrites_ && xQueueReceive(configWrites_, &write, 0) == pdTRUE) {
+    if (!clientTrusted(write.connectionHandle)) {
+      LOG_WARN(kTag, "Ignored configuration from untrusted connection %u",
+               write.connectionHandle);
+      continue;
+    }
+    const std::string value(write.text);
+    if (write.discovery) handleDiscoveryWrite(value);
+    else handleConfigWrite(value);
+  }
+}
+
+void BleManager::handleConfigWrite(const std::string& value) {
+  if (value.rfind("sp630e.", 0) == 0)
+    setSp630eConfig(value);
+  else if (value.rfind("rvc.save=", 0) == 0)
+    setRvcFanConfig(value);
+  else if (value.rfind("wifi.ap=", 0) == 0)
+    setCerboWifiConfig(value);
+  else
+    setBatteryCapacityConfig(value);
+}
+
+void BleManager::handleDiscoveryWrite(const std::string& value) {
+  if (value == "sp630e") {
+    requestSp630eDiscovery();
+    return;
+  }
+  if (value == "sp630e.config") latestDiscoveryPayload_ = sp630eConfig();
+  else if (value == "rvc.config") latestDiscoveryPayload_ = rvcFanConfig();
+  else if (value == "wifi.config") latestDiscoveryPayload_ = cerboWifiConfig();
+  else {
+    LOG_WARN(kTag, "Rejected unknown discovery request");
+    return;
+  }
+  discoveryCharacteristic_->setValue(latestDiscoveryPayload_.c_str());
+  discoveryCharacteristic_->notify(
+      reinterpret_cast<const uint8_t*>(latestDiscoveryPayload_.c_str()),
+      latestDiscoveryPayload_.length());
 }
 
 void BleManager::requestSp630eDiscovery() {
@@ -771,6 +829,12 @@ void BleManager::processTouchCommand() {
     }
     portEXIT_CRITICAL(&commandQueueMux_);
     if (!available) break;
+    if (!clientTrusted(queued.connectionHandle)) {
+      acknowledgeTouchCommand(queued.connectionHandle, queued.sequence,
+                              queued.command, queued.target,
+                              static_cast<uint8_t>(BlueSquidBle::AckResult::InvalidCommand));
+      continue;
+    }
 
     BlueSquidBle::AckResult result = BlueSquidBle::AckResult::Accepted;
     const auto command = static_cast<BlueSquidControl::Command>(queued.command);
@@ -856,6 +920,27 @@ void BleManager::processTouchCommand() {
         break;
       case BlueSquidControl::Command::RequestStatus:
         break;
+      case BlueSquidControl::Command::FactoryReset:
+        if (queued.length != 2 ||
+            value != BlueSquidControl::kFactoryResetConfirmation) {
+          result = BlueSquidBle::AckResult::InvalidValue;
+        } else {
+          LOG_WARN(kTag, "Factory reset requested by touchscreen on connection %u",
+                   queued.connectionHandle);
+          factoryResetRequested_ = true;
+          factoryResetRequestedMs_ = millis();
+        }
+        break;
+      case BlueSquidControl::Command::OpenPairing:
+        // Commands reach here only from trusted connections.
+        if (queued.length != 2) {
+          result = BlueSquidBle::AckResult::InvalidValue;
+        } else {
+          LOG_INFO(kTag, "Touchscreen on connection %u requested Bluetooth pairing",
+                   queued.connectionHandle);
+          openPairingWindow();
+        }
+        break;
       case BlueSquidControl::Command::SetAllLights:
         if (queued.length != 2 || value > 1)
           result = BlueSquidBle::AckResult::InvalidValue;
@@ -888,29 +973,36 @@ void BleManager::processTouchCommand() {
     }
 
     if (result == BlueSquidBle::AckResult::Accepted) {
+      // Release the touchscreen's ACK gate before sending the corresponding
+      // snapshot; otherwise it discards the immediate update and waits a second.
+      acknowledgeTouchCommand(queued.connectionHandle, queued.sequence,
+                              queued.command, queued.target,
+                              static_cast<uint8_t>(result), true);
       SystemStatus current = latestStatus_;
       current.outputs = outputController_.status();
       current.sensors = sensorManager_.status();
       current.battery = batteryManager_.status();
       current.uptimeSeconds = millis() / 1000U;
       publishStatus(current);
+    } else {
+      acknowledgeTouchCommand(queued.connectionHandle, queued.sequence,
+                              queued.command, queued.target,
+                              static_cast<uint8_t>(result));
     }
-    acknowledgeTouchCommand(queued.connectionHandle, queued.sequence,
-                            queued.command, queued.target,
-                            static_cast<uint8_t>(result));
   }
 }
 
 void BleManager::acknowledgeTouchCommand(uint16_t connectionHandle,
                                          uint16_t sequence, uint8_t command,
-                                         uint8_t target, uint8_t result) {
+                                         uint8_t target, uint8_t result,
+                                         bool nextSnapshot) {
   if (touchAckCharacteristic_ == nullptr) return;
   uint8_t packet[BlueSquidBle::kAckSize]{};
   packet[0] = BlueSquidBle::kProtocolVersion;
   BlueSquidBle::writeU16(packet + 1, sequence);
   packet[3] = command;
   packet[4] = result;
-  BlueSquidBle::writeU32(packet + 5, touchStateRevision_);
+  BlueSquidBle::writeU32(packet + 5, touchStateRevision_ + (nextSnapshot ? 1U : 0U));
   packet[9] = target;
   touchAckCharacteristic_->setValue(packet, sizeof(packet));
   if (connectedClientCount_ > 0)
@@ -965,9 +1057,9 @@ void BleManager::registerClient(uint16_t connectionHandle) {
   portENTER_CRITICAL(&clientMux_);
   for (ConnectedClient& client : clients_) {
     if (!client.connected) {
+      client = ConnectedClient{};
       client.connectionHandle = connectionHandle;
-      client.lastActivityMs = millis();
-      client.primary = false;
+      client.lastActivityMs = client.connectedMs = millis();
       client.connected = true;
       break;
     }
@@ -995,6 +1087,62 @@ void BleManager::recordClientActivity(uint16_t connectionHandle) {
     }
   }
   portEXIT_CRITICAL(&clientMux_);
+}
+
+void BleManager::requestClientVerification(uint16_t connectionHandle) {
+  portENTER_CRITICAL(&clientMux_);
+  for (ConnectedClient& client : clients_) {
+    if (client.connected && client.connectionHandle == connectionHandle) {
+      client.verifyPending = true;
+      break;
+    }
+  }
+  portEXIT_CRITICAL(&clientMux_);
+}
+
+void BleManager::verifyClients() {
+  uint16_t handles[kMaximumClients]{};
+  uint8_t count = 0;
+  portENTER_CRITICAL(&clientMux_);
+  for (ConnectedClient& client : clients_) {
+    if (!client.connected || !client.verifyPending) continue;
+    client.verifyPending = false;
+    handles[count++] = client.connectionHandle;
+  }
+  portEXIT_CRITICAL(&clientMux_);
+
+  for (uint8_t index = 0; index < count; ++index) {
+    ble_gap_conn_desc description{};
+    if (ble_gap_conn_find(handles[index], &description) != 0 ||
+        !description.sec_state.encrypted)
+      continue;
+    const bool trusted = bondGuard_.verify(description.peer_id_addr, millis());
+    portENTER_CRITICAL(&clientMux_);
+    for (ConnectedClient& client : clients_)
+      if (client.connected && client.connectionHandle == handles[index])
+        client.trusted = trusted;
+    portEXIT_CRITICAL(&clientMux_);
+    LOG_INFO(kTag, "Connection %u %s", handles[index],
+             trusted ? "trusted" : "rejected; disconnecting");
+    if (!trusted && server_ != nullptr) server_->disconnect(handles[index]);
+  }
+}
+
+bool BleManager::clientTrusted(uint16_t connectionHandle) const {
+  bool trusted = false;
+  portENTER_CRITICAL(&clientMux_);
+  for (const ConnectedClient& client : clients_) {
+    if (client.connected && client.connectionHandle == connectionHandle) {
+      trusted = client.trusted;
+      break;
+    }
+  }
+  portEXIT_CRITICAL(&clientMux_);
+  return trusted;
+}
+
+void BleManager::openPairingWindow() {
+  bondGuard_.openWindow(millis());
 }
 
 void BleManager::setClientPrimary(uint16_t connectionHandle, bool primary) {
@@ -1046,19 +1194,24 @@ void BleManager::disconnectIdleClients() {
   uint8_t idleCount = 0;
   const uint32_t now = millis();
 
+  // Connections that never prove a trusted bond would otherwise hold radio
+  // slots the SP630E modules need; allow them only while pairing is open.
+  const bool pairing = bondGuard_.windowOpen(now);
   portENTER_CRITICAL(&clientMux_);
   for (ConnectedClient& client : clients_) {
-    if (client.connected && !client.primary &&
-        now - client.lastActivityMs >=
-            AppConfig::Ble::kSecondaryClientIdleTimeoutMs) {
+    const bool idle = !client.primary &&
+        now - client.lastActivityMs >= AppConfig::Ble::kSecondaryClientIdleTimeoutMs;
+    const bool unverified = !client.trusted && !pairing &&
+        now - client.connectedMs >= AppConfig::Ble::kUntrustedClientTimeoutMs;
+    if (client.connected && (idle || unverified)) {
       idleHandles[idleCount++] = client.connectionHandle;
-      client.lastActivityMs = now;
+      client.lastActivityMs = client.connectedMs = now;
     }
   }
   portEXIT_CRITICAL(&clientMux_);
 
   for (uint8_t index = 0; index < idleCount; ++index) {
-    LOG_INFO(kTag, "Disconnecting idle secondary client %u",
+    LOG_INFO(kTag, "Disconnecting idle or untrusted client %u",
              idleHandles[index]);
     server_->disconnect(idleHandles[index]);
   }

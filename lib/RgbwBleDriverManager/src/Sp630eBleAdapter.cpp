@@ -6,6 +6,9 @@
 namespace {
 constexpr char kTag[] = "SP630E";
 constexpr uint32_t kReconnectMs = 3000;
+// All SP630E central links use the same interval, including after reconnect.
+// Mixed 30/40 ms links showed second-long GATT stalls with three modules.
+constexpr uint16_t kConnectionInterval = 32; // 40 ms, in 1.25 ms units
 SemaphoreHandle_t connectMutex = nullptr;
 portMUX_TYPE discoveryMutex = portMUX_INITIALIZER_UNLOCKED;
 struct DiscoveryResult {
@@ -51,8 +54,14 @@ class Sp630eClientCallbacks final : public NimBLEClientCallbacks {
  public:
   explicit Sp630eClientCallbacks(Sp630eBleAdapter& owner) : owner_(owner) {}
   void onDisconnect(NimBLEClient*) override { owner_.disconnected(); }
-  bool onConnParamsUpdateRequest(NimBLEClient*, const ble_gap_upd_params*) override {
-    return true;
+  bool onConnParamsUpdateRequest(NimBLEClient*, const ble_gap_upd_params* params) override {
+    // L2CAP requests otherwise bypass our initial connection parameters.
+    const bool accept = params->itvl_min == kConnectionInterval &&
+                        params->itvl_max == kConnectionInterval && params->latency == 0;
+    LOG_INFO(kTag, "SP630E timing request min=%u max=%u latency=%u: %s",
+             params->itvl_min, params->itvl_max, params->latency,
+             accept ? "accepted" : "keeping 40 ms interval");
+    return accept;
   }
  private:
   Sp630eBleAdapter& owner_;
@@ -81,9 +90,7 @@ void Sp630eBleAdapter::begin() {
     return;
   }
   client_->setClientCallbacks(new Sp630eClientCallbacks(*this), true);
-  // Request 15-30 ms connection events instead of 45-75 ms. Keep the same
-  // supervision timeout and allow peripheral parameter negotiation.
-  client_->setConnectionParams(12, 24, 0, 300);
+  client_->setConnectionParams(kConnectionInterval, kConnectionInterval, 0, 300);
   client_->setConnectTimeout(4);
   LOG_INFO(kTag, "%s: starting status worker for %s", label_, configuredAddress_.c_str());
   if (xTaskCreate(taskEntry, "sp630e", 6144, this, 1, &task_) != pdPASS) {
@@ -353,6 +360,9 @@ void Sp630eBleAdapter::taskLoop() {
       portENTER_CRITICAL(&mutex_);
       sentRevision_ = revision;
       portEXIT_CRITICAL(&mutex_);
+      // Confirm this batch on the next worker iteration, not at the next
+      // two-second idle poll. A newer gesture still takes priority.
+      lastQuery = millis() - Sp630eProtocol::kPollMs;
     }
   }
 }
@@ -453,7 +463,9 @@ bool Sp630eBleAdapter::connect() {
     LOG_WARN(kTag, "%s: peripheral did not enable requested notifications", label_);
     return false;
   }
-  LOG_INFO(kTag, "%s connected to %s; polling status (diagnostics v3)", label_, configuredAddress_.c_str());
+  auto info = client_->getConnInfo();
+  LOG_INFO(kTag, "%s connected to %s; interval=%u x1.25ms latency=%u; polling status",
+           label_, configuredAddress_.c_str(), info.getConnInterval(), info.getConnLatency());
   return true;
 }
 
@@ -465,6 +477,17 @@ bool Sp630eBleAdapter::write(const uint8_t* data, size_t length) {
   const uint32_t started = millis();
   const bool written = command_->writeValue(data, length, command_->canWrite());
   const uint32_t elapsed = millis() - started;
+  timingTotalMs_ += elapsed;
+  ++timingCount_;
+  if (elapsed > timingMaxMs_) timingMaxMs_ = elapsed;
+  if (millis() - timingWindowMs_ >= 30000) {
+    LOG_INFO(kTag, "%s: GATT timing samples=%lu average=%lu ms maximum=%lu ms",
+             label_, static_cast<unsigned long>(timingCount_),
+             static_cast<unsigned long>(timingTotalMs_ / timingCount_),
+             static_cast<unsigned long>(timingMaxMs_));
+    timingWindowMs_ = millis();
+    timingTotalMs_ = timingCount_ = timingMaxMs_ = 0;
+  }
   if (!written || elapsed >= 200)
     LOG_WARN(kTag, "%s: GATT opcode=%02X took=%lu ms success=%u error=%d",
              label_, length > 1 ? data[1] : 0,

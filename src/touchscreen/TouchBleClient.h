@@ -11,6 +11,7 @@
 #include "BleReconnectWatchdog.h"
 #include "BleDiscoveryRecovery.h"
 #include "TouchRemoteStatus.h"
+#include "SnapshotRevisionGate.h"
 #include "OtaCredentials.h"
 #include "OtaLink.h"
 
@@ -41,8 +42,15 @@ class TouchBleClient {
   bool saveRvcFanConfiguration(uint8_t enabled, uint8_t instance, uint8_t source);
   bool configureCerboWifi(const String& ssid, const String& password,
                           uint8_t vebusUnitId);
-  const String& sp630ePayload() const { return sp630ePayload_; }
-  uint32_t sp630ePayloadRevision() const { return sp630ePayloadRevision_; }
+  String sp630ePayload() const;
+  // Sends a command whose own acknowledgement the UI waits for, such as
+  // OpenPairing or FactoryReset. One tracked request at a time.
+  bool requestAction(BlueSquidControl::Command command, uint16_t value);
+  // 0: waiting, 1: accepted, 2: Controller declined (e.g. older firmware).
+  uint8_t actionResult() const { return actionResult_.load(); }
+  // Stops radio activity first; restarting mid-scan could panic.
+  void restartQuietly();
+  uint32_t sp630ePayloadRevision() const { return sp630ePayloadRevision_.load(); }
 
  private:
   void updateConnection();
@@ -76,6 +84,7 @@ class TouchBleClient {
   bool sendValueCommand(BlueSquidControl::Command command, uint8_t target,
                         uint16_t value);
   bool sendRgbwState(uint8_t zone);
+  void prepareRgbwState(uint8_t zone);
 
   static void snapshotNotification(NimBLERemoteCharacteristic*, uint8_t* data,
                                    size_t length, bool);
@@ -101,9 +110,15 @@ class TouchBleClient {
   NimBLERemoteCharacteristic* ackCharacteristic_ = nullptr;
   NimBLERemoteCharacteristic* configCharacteristic_ = nullptr;
   NimBLERemoteCharacteristic* discoveryCharacteristic_ = nullptr;
-  String sp630ePayload_;
-  uint32_t sp630ePayloadRevision_ = 0;
+  // Written by the NimBLE task, read by the UI: copied under a lock rather
+  // than as a heap String, so a notification cannot reallocate it mid-read.
+  char sp630ePayload_[256]{};
+  std::atomic<uint32_t> sp630ePayloadRevision_{0};
+  mutable portMUX_TYPE payloadMux_ = portMUX_INITIALIZER_UNLOCKED;
   uint16_t commandSequence_ = 1;
+  std::atomic<uint8_t> actionCommand_{0};
+  std::atomic<uint16_t> actionSequence_{0};
+  std::atomic<uint8_t> actionResult_{0};
   std::atomic<uint32_t> lastConnectAttemptMs_{0};
   uint32_t receivedSnapshotCount_ = 0;
   uint32_t receivedAckCount_ = 0;
@@ -123,6 +138,14 @@ class TouchBleClient {
   bool initialized_ = false;
   bool assignmentRefreshPending_ = true;
   bool rgbwPending_[4]{};
+  // Outgoing commands must never masquerade as received device status.
+  struct RgbwRequest {
+    uint8_t channels[4]{};
+    uint8_t colour[3]{};
+    uint8_t brightness = 0;
+    uint8_t options = 0;
+  } rgbwRequested_[4];
+  SnapshotRevisionGate rgbwSnapshotGate_[4];
   bool rgbwAwaitingAck_[4]{};
   uint16_t rgbwSequence_[4]{};
   uint32_t rgbwChangedMs_[4]{};

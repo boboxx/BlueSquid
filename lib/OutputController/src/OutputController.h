@@ -61,6 +61,7 @@ class OutputController {
   std::function<bool(uint8_t)> fanCommand_;
   std::function<bool(bool)> fanDirectionCommand_;
   PersistentDeviceState deviceState_{};
+  uint8_t rememberedRgbwOptions_[4]{2, 2, 2, 2};
   uint8_t lightGroupMask_ = 15;
   bool externalRgbw_[4]{};
   bool restoring_ = false;

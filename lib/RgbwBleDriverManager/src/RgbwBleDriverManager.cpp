@@ -44,18 +44,29 @@ void RgbwBleDriverManager::registerAdapter(RgbwBleDriverAdapter* adapter) {
   }
 }
 
+bool RgbwBleDriverManager::hostsAccessory(
+    const RgbwBleDriverAdapter* adapter) const {
+  if (adapter == nullptr) return false;
+  for (const ChannelAssignment& assignment : accessoryAdapters_)
+    if (assignment.adapter == adapter) return true;
+  return false;
+}
+
 void RgbwBleDriverManager::begin() {
   const uint32_t now = millis();
   for (uint8_t index = 0; index < kAdapterCount; ++index) {
     desired_[index] = collectFor(adapters_[index]);
     changedMs_[index] = now;
-    // Query on startup before applying any restored local settings.
-    pending_[index] = false;
+    // Full-strip lights adopt the module's state on startup. Accessory
+    // channels (pump, USB, accessories 3/4) instead start from the restored
+    // safe state, so a pump left on before a restart is switched off.
+    pending_[index] = hostsAccessory(adapters_[index]);
     if (adapters_[index] != nullptr) adapters_[index]->begin();
   }
 }
 
-void RgbwBleDriverManager::update() {
+bool RgbwBleDriverManager::update() {
+  bool feedbackChanged = false;
   const uint32_t now = millis();
   for (uint8_t index = 0; index < kAdapterCount; ++index) {
     RgbwBleDriverAdapter* adapter = adapters_[index];
@@ -72,7 +83,11 @@ void RgbwBleDriverManager::update() {
     if (!pending_[index] && adapter->reported(reported, revision) &&
         revision != reportRevision_[index]) {
       reportRevision_[index] = revision;
-      if (!equal(current, reported)) applyReport(adapter, reported);
+      if (!equal(current, reported)) {
+        const auto before = outputs_.status();
+        applyReport(adapter, reported);
+        feedbackChanged |= memcmp(&before, &outputs_.status(), sizeof(before)) != 0;
+      }
       // Feedback must not become a new outbound command.
       desired_[index] = collectFor(adapter);
     }
@@ -84,6 +99,7 @@ void RgbwBleDriverManager::update() {
     lastAttemptMs_[index] = now;
     if (adapter->send(desired_[index])) pending_[index] = false;
   }
+  return feedbackChanged;
 }
 
 RgbwBleDriverState RgbwBleDriverManager::collectFor(
@@ -97,18 +113,27 @@ RgbwBleDriverState RgbwBleDriverManager::collectFor(
       state.channels[rgbwChannels_[zone]] = std::max(output.rgbw[zone][0], std::max(output.rgbw[zone][1], std::max(output.rgbw[zone][2], output.rgbw[zone][3])));
       continue;
     }
-    memcpy(state.channels, output.rgbw[zone], 4);
-    state.channels[3] = (output.rgbwOptions[zone] & 2) ? output.rgbw[zone][3] : 0;
-    state.channels[4] = (output.rgbwOptions[zone] & 4) ? output.rgbw[zone][3] : 0;
+    // Only drive the outputs the user marked as wired for this light.
+    const uint8_t wired = Sp630eChannels::capabilities(rgbwChannels_[zone]);
+    const uint8_t white = output.rgbw[zone][3];
+    uint8_t tones = output.rgbwOptions[zone] & 6;
+    if ((wired & 6) && (tones & ~wired)) {
+      // A requested white that is not wired uses the white that is.
+      tones &= wired;
+      if (!tones) tones = wired & 6;
+    }
+    if (wired & Sp630eChannels::kColour) memcpy(state.channels, output.rgbw[zone], 3);
+    state.channels[3] = (tones & 2) ? white : 0;
+    state.channels[4] = (tones & 4) ? white : 0;
     memcpy(state.color, output.rgb[zone], 3);
     state.brightness = output.rgbwBrightness[zone];
-    state.options = (output.rgbwOptions[zone] & 1) | ((output.rgbwOptions[zone] & 6) ? 2 : 0);
-    if (rgbwChannels_[zone] == Sp630eChannels::rgbOnly) {
-      // Group/scene white requests use RGB white on an RGB-only strip.
+    state.options = (wired & output.rgbwOptions[zone] & 1) | (tones ? 2 : 0);
+    if (!(wired & 6)) {
+      // Group/scene white requests use RGB white on a strip without white.
       for (uint8_t channel = 0; channel < 3; ++channel)
-        state.channels[channel] = std::max(state.channels[channel], output.rgbw[zone][3]);
+        state.channels[channel] = std::max(state.channels[channel], white);
       state.channels[3] = state.channels[4] = 0;
-      state.options = (state.channels[0] || state.channels[1] || state.channels[2]) ? 1 : 0;
+      state.options =(state.channels[0] || state.channels[1] || state.channels[2]) ? 1 : 0;
     }
     return state;  // Full-strip assignment owns the physical controller.
   }
@@ -156,12 +181,31 @@ void RgbwBleDriverManager::applyReport(RgbwBleDriverAdapter* adapter,
           outputs_.setRgbwPresetField(static_cast<RgbwZone>(zone), 4, 2);
         continue;
       }
-      const bool rgbOnly = rgbwChannels_[zone] == Sp630eChannels::rgbOnly;
+      // Feedback for outputs marked as not wired is not a light state.
+      const uint8_t wired = Sp630eChannels::capabilities(rgbwChannels_[zone]);
+      const uint8_t warm = (wired & Sp630eChannels::kWarmWhite) ? state.channels[3] : 0;
+      const uint8_t cool = (wired & Sp630eChannels::kCoolWhite) ? state.channels[4] : 0;
+      const bool anyOutput = state.channels[0] || state.channels[1] || state.channels[2] ||
+                             warm || cool;
       // Channels first, then the preset, so OutputController's delayed
       // channel-to-preset conversion cannot overwrite the reported preset.
-      for (uint8_t channel = 0; channel < 4; ++channel)
-        outputs_.setRgbwChannel(static_cast<RgbwZone>(zone), channel,
-                                channel == 3 ? (rgbOnly ? 0 : std::max(state.channels[3], state.channels[4])) : state.channels[channel]);
+      bool channelsChanged = false;
+      for (uint8_t channel = 0; channel < 4; ++channel) {
+        const uint8_t level = channel == 3 ? std::max(warm, cool) : state.channels[channel];
+        if (outputs_.status().rgbw[zone][channel] != level) {
+          outputs_.setRgbwChannel(static_cast<RgbwZone>(zone), channel, level);
+          channelsChanged = true;
+        }
+      }
+      // Power-off reports can retain an unrelated hardware mode and zeroed
+      // colour/brightness. Keep the user's preset for the next group toggle,
+      // and cancel delayed channel-to-preset conversion after these writes.
+      if (!anyOutput) {
+        if (channelsChanged)
+          outputs_.setRgbwPresetField(static_cast<RgbwZone>(zone), 4,
+                                      outputs_.status().rgbwOptions[zone]);
+        return;
+      }
       const bool hasColour = state.color[0] || state.color[1] || state.color[2];
       for (uint8_t field = 0; field < 3; ++field) {
         const uint8_t selected = hasColour ? state.color[field] : outputs_.status().rgb[zone][field];
@@ -169,15 +213,10 @@ void RgbwBleDriverManager::applyReport(RgbwBleDriverAdapter* adapter,
       }
       outputs_.setRgbwPresetField(static_cast<RgbwZone>(zone), 3, state.brightness);
       // A coexistence mode flag is capability, not an active RGB selection.
-      const bool anyOutput = state.channels[0] || state.channels[1] || state.channels[2] ||
-                             state.channels[3] || state.channels[4];
-      const uint8_t colourOption = anyOutput
-          ? ((state.channels[0] || state.channels[1] || state.channels[2]) ? 1 : 0)
-          : (state.options & 1);
+      const uint8_t colourOption =
+          (state.channels[0] || state.channels[1] || state.channels[2]) ? 1 : 0;
       outputs_.setRgbwPresetField(static_cast<RgbwZone>(zone), 4,
-          colourOption | (rgbOnly ? 0 : ((state.channels[3] || state.channels[4])
-              ? (state.channels[3] ? 2 : 0) | (state.channels[4] ? 4 : 0)
-              : ((state.options & 2) ? ((outputs_.status().rgbwOptions[zone] & 6) ? (outputs_.status().rgbwOptions[zone] & 6) : 2) : 0))));
+          colourOption | (warm ? 2 : 0) | (cool ? 4 : 0));
       return;
     }
   }

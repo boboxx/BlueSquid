@@ -58,6 +58,8 @@ class Sp630eBleAdapter final : public RgbwBleDriverAdapter {
   uint32_t lastReportMs_ = 0;
   uint32_t notificationCount_ = 0;
   uint32_t decodedCount_ = 0;
+  uint32_t timingWindowMs_ = 0, timingTotalMs_ = 0;
+  uint32_t timingCount_ = 0, timingMaxMs_ = 0;
   uint8_t configuration_ = 0;
   Sp630eProtocol::ResponseHealth responseHealth_;
   Sp630eProtocol::WarmCommandCache warmCache_;

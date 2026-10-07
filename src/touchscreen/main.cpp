@@ -484,7 +484,7 @@ void styleTabButtons(lv_obj_t* tabs) {
       BLUESQUID_SYMBOL_LIGHTBULB,
       LV_SYMBOL_POWER,
       LV_SYMBOL_CHARGE,
-      LV_SYMBOL_BARS,
+      LV_SYMBOL_SETTINGS,
   };
   const uint32_t tabCount = lv_tabview_get_tab_count(tabs);
   for (uint32_t index = 0; index < tabCount; ++index) {
@@ -3899,7 +3899,7 @@ void buildUi() {
   lv_obj_t* lights = lv_tabview_add_tab(tabs, "Light");
   lv_obj_t* controls = lv_tabview_add_tab(tabs, "Control");
   lv_obj_t* power = lv_tabview_add_tab(tabs, "Power");
-  lv_obj_t* menu = lv_tabview_add_tab(tabs, "Menu");
+  lv_obj_t* menu = lv_tabview_add_tab(tabs, "Settings");
   lv_obj_add_event_cb(lv_tabview_get_tab_button(tabs, 4), menuTabClicked,
                       LV_EVENT_CLICKED, nullptr);
   styleTabButtons(tabs);
@@ -3988,7 +3988,7 @@ void buildUi() {
 
   applyDeviceDisplayLayout();
 
-  addHeader(menu, "Menu", 4);
+  addHeader(menu, "Settings", 4);
   lv_obj_t* menuPanel = makeCard(menu, 16, 61, 768, 343);
   lv_obj_add_flag(menuPanel, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(menuPanel, LV_DIR_VER);

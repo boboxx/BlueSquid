@@ -21,6 +21,7 @@
 #include <SPI.h>
 
 #include <cmath>
+#include <vector>
 
 #include "AppConfig.h"
 #include "LightbulbFont.h"
@@ -45,6 +46,7 @@ TouchBleClient transportClient;
 constexpr char kTransportName[] = "BLE";
 Board* panel = nullptr;
 lv_obj_t* tabView = nullptr;
+std::vector<lv_obj_t*> menuPageOverlays;
 bool sdMounted = false;
 const char* sdMountError = "SD card is not initialized.";
 constexpr uint32_t kColorBackground = 0x0D1114;
@@ -52,9 +54,7 @@ constexpr uint32_t kColorSurface = 0x171C20;
 constexpr uint32_t kColorCard = 0x20262B;
 constexpr uint32_t kColorCardChecked = 0x26343A;
 constexpr uint32_t kColorControlCard = 0x343733;
-constexpr uint32_t kColorControlActive = 0xF2F1EE;
 constexpr uint32_t kColorControlText = 0x121411;
-constexpr uint32_t kColorControlMuted = 0x747773;
 constexpr uint32_t kColorIconCircle = 0x292D2B;
 constexpr uint32_t kColorBorder = 0x303940;
 constexpr uint32_t kColorText = 0xF4F7F8;
@@ -263,6 +263,7 @@ lv_obj_t* controlIconLabels[4]{};
 lv_obj_t* settingsOverlay = nullptr;
 lv_obj_t* firmwareUpdateOverlay = nullptr;
 lv_obj_t* bluetoothControllersOverlay = nullptr;
+lv_obj_t* deviceSaveButton = nullptr;
 lv_obj_t* hotspotOverlay = nullptr;
 lv_obj_t* hotspotSsid = nullptr;
 lv_obj_t* hotspotPassword = nullptr;
@@ -319,7 +320,6 @@ lv_obj_t* labelConfigIconLabels[kDeviceLabelCount]{};
 lv_obj_t* labelEditorIconLabel = nullptr;
 lv_obj_t* iconPickerOverlay = nullptr;
 lv_obj_t* systemInfoOverlay = nullptr;
-lv_obj_t* aboutOverlay = nullptr;
 lv_obj_t* systemConnectionLabel = nullptr;
 lv_obj_t* systemRearFirmwareLabel = nullptr;
 lv_obj_t* systemUptimeLabel = nullptr;
@@ -834,6 +834,45 @@ void addHeader(lv_obj_t* page, const char* title, int connectionIndex) {
   makeMoonButton(page);
 }
 
+void styleFormControl(lv_obj_t* control) {
+  lv_obj_set_style_bg_color(control, lv_color_hex(kColorSurface), 0);
+  lv_obj_set_style_bg_opa(control, LV_OPA_COVER, 0);
+  lv_obj_set_style_text_color(control, lv_color_hex(kColorText), 0);
+  lv_obj_set_style_text_font(control, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_border_width(control, 0, 0);
+  lv_obj_set_style_shadow_width(control, 0, 0);
+  lv_obj_set_style_radius(control, 8, 0);
+}
+
+void styleDropdownList(lv_event_t* event) {
+  auto* dropdown = static_cast<lv_obj_t*>(lv_event_get_target(event));
+  auto* list = lv_dropdown_get_list(dropdown);
+  if (list == nullptr) return;
+  styleFormControl(list);
+  const lv_style_selector_t states[] = {
+      LV_STATE_CHECKED, LV_STATE_PRESSED, LV_STATE_CHECKED | LV_STATE_PRESSED};
+  for (lv_style_selector_t state : states) {
+    lv_obj_set_style_bg_color(list, lv_color_hex(kColorCyan), LV_PART_SELECTED | state);
+    lv_obj_set_style_text_color(list, lv_color_hex(kColorControlText), LV_PART_SELECTED | state);
+  }
+}
+
+lv_obj_t* makeDropdown(lv_obj_t* parent) {
+  auto* control = lv_dropdown_create(parent);
+  styleFormControl(control);
+  lv_obj_add_event_cb(control, styleDropdownList, LV_EVENT_READY, nullptr);
+  return control;
+}
+
+lv_obj_t* makeTextArea(lv_obj_t* parent) {
+  auto* control = lv_textarea_create(parent);
+  styleFormControl(control);
+  lv_obj_set_style_text_color(control, lv_color_hex(kColorMuted), LV_PART_TEXTAREA_PLACEHOLDER);
+  lv_obj_set_style_bg_color(control, lv_color_hex(kColorCyan), LV_PART_SELECTED);
+  lv_obj_set_style_text_color(control, lv_color_hex(kColorControlText), LV_PART_SELECTED);
+  return control;
+}
+
 lv_obj_t* makeCard(lv_obj_t* parent, int x, int y, int width, int height) {
   lv_obj_t* card = lv_obj_create(parent);
   lv_obj_set_pos(card, x, y);
@@ -841,8 +880,8 @@ lv_obj_t* makeCard(lv_obj_t* parent, int x, int y, int width, int height) {
   lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(card, lv_color_hex(kColorControlCard), 0);
   lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(card, 1, 0);
-  lv_obj_set_style_border_color(card, lv_color_hex(kColorBorder), 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  lv_obj_set_style_shadow_width(card, 0, 0);
   lv_obj_set_style_radius(card, 18, 0);
   lv_obj_set_style_pad_all(card, 0, 0);
   return card;
@@ -975,21 +1014,14 @@ void styleControlCard(lv_obj_t* button) {
   lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlCard), 0);
   lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlCard),
                             LV_STATE_PRESSED);
-  lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlActive),
+  lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlCard),
                             LV_STATE_CHECKED);
-  lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlActive),
+  lv_obj_set_style_bg_color(button, lv_color_hex(kColorControlCard),
                             checkedPressed);
   lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_STATE_PRESSED);
   lv_obj_set_style_bg_opa(button, LV_OPA_COVER, checkedPressed);
-  lv_obj_set_style_border_width(button, 1, 0);
-  lv_obj_set_style_border_color(button, lv_color_hex(kColorBorder), 0);
-  lv_obj_set_style_border_color(button, lv_color_hex(kColorBorder),
-                                LV_STATE_PRESSED);
-  lv_obj_set_style_border_color(button, lv_color_hex(kColorControlActive),
-                                LV_STATE_CHECKED);
-  lv_obj_set_style_border_color(button, lv_color_hex(kColorControlActive),
-                                checkedPressed);
+  lv_obj_set_style_border_width(button, 0, 0);
   lv_obj_set_style_color_filter_opa(button, LV_OPA_TRANSP, LV_STATE_PRESSED);
   lv_obj_set_style_color_filter_opa(button, LV_OPA_TRANSP, checkedPressed);
   lv_obj_set_style_transform_width(button, 0, LV_STATE_PRESSED);
@@ -1175,8 +1207,8 @@ void syncZoneButton(uint8_t zone, bool enabled) {
   else lv_obj_remove_state(zoneButtons[zone], LV_STATE_CHECKED);
   lv_label_set_text(zoneStateLabels[zone], "");
   lv_obj_set_style_text_color(zoneBrightnessValues[zone],
-      lv_color_hex(enabled ? kColorControlMuted : kColorMuted), 0);
-  const uint32_t primary = enabled ? kColorControlText : kColorText;
+      lv_color_hex(kColorMuted), 0);
+  const uint32_t primary = kColorText;
   const uint32_t accent = deviceIconColour(labelForRgbZone(zone), kColorLightbulb);
   lv_obj_set_style_bg_color(zoneIconCircles[zone],
       lv_color_hex(enabled ? accent : kColorIconCircle), 0);
@@ -1184,7 +1216,7 @@ void syncZoneButton(uint8_t zone, bool enabled) {
       lv_color_hex(enabled ? kColorControlText : accent), 0);
   lv_obj_set_style_text_color(zoneTitleLabels[zone], lv_color_hex(primary), 0);
   lv_obj_set_style_text_color(zoneStateLabels[zone],
-      lv_color_hex(enabled ? kColorControlText : kColorMuted), 0);
+      lv_color_hex(kColorMuted), 0);
 }
 
 void holdZoneState(uint8_t zone, bool enabled) {
@@ -1735,45 +1767,28 @@ void closeOverlay(lv_event_t* event) {
   if (overlay != nullptr) lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
+void dismissMenuPages() {
+  // Include lazily created pages and every level of nested settings.
+  for (auto* overlay : menuPageOverlays)
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
 void tabNavigationChanged(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
   lv_obj_t* tabs = static_cast<lv_obj_t*>(lv_event_get_target(event));
   if (tabs != nullptr) syncTabButtonLabels(tabs);
-  if (firmwareUpdateOverlay != nullptr)
-    lv_obj_add_flag(firmwareUpdateOverlay, LV_OBJ_FLAG_HIDDEN);
-  if (settingsOverlay != nullptr) {
-    lv_obj_add_flag(settingsOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (bluetoothControllersOverlay != nullptr) {
-    lv_obj_add_flag(bluetoothControllersOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (cerboWifiOverlay != nullptr)
-    lv_obj_add_flag(cerboWifiOverlay, LV_OBJ_FLAG_HIDDEN);
-  if (camperPositionOverlay != nullptr) {
-    lv_obj_add_flag(camperPositionOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (displaySettingsOverlay != nullptr) {
-    lv_obj_add_flag(displaySettingsOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (systemInfoOverlay != nullptr) {
-    lv_obj_add_flag(systemInfoOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (aboutOverlay != nullptr) {
-    lv_obj_add_flag(aboutOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (labelConfigOverlay != nullptr) {
-    lv_obj_add_flag(labelConfigOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (labelEditorOverlay != nullptr) {
-    lv_obj_add_flag(labelEditorOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
-  if (iconPickerOverlay != nullptr) {
-    lv_obj_add_flag(iconPickerOverlay, LV_OBJ_FLAG_HIDDEN);
-  }
+  dismissMenuPages();
+}
+
+void menuTabClicked(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  // LVGL only emits VALUE_CHANGED when selecting a different tab.
+  dismissMenuPages();
 }
 
 lv_obj_t* createPageOverlay(const char* title) {
   lv_obj_t* overlay = lv_obj_create(lv_screen_active());
+  menuPageOverlays.push_back(overlay);
   lv_obj_set_pos(overlay, 0, 0);
   lv_obj_set_size(overlay, 800, 416);
   lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
@@ -2141,8 +2156,8 @@ void matchKeyboardCheckButtons() {
   const lv_font_t* font = lv_obj_get_style_text_font(keyboard, LV_PART_ITEMS);
   for (uint8_t i = 0; i < checkButtonCount; ++i) {
     auto* button = checkButtons[i];
-    lv_obj_set_size(button, keyWidth, keyHeight);
-    lv_obj_set_pos(button, 780 - keyWidth, 8);
+    lv_obj_set_size(button, keyWidth, button == deviceSaveButton ? 40 : keyHeight);
+    lv_obj_set_pos(button, 780 - keyWidth, button == deviceSaveButton ? 4 : 8);
     lv_obj_add_flag(button, LV_OBJ_FLAG_FLOATING);
     lv_obj_move_foreground(button);
     lv_obj_set_style_radius(button, lv_obj_get_style_radius(keyboard, LV_PART_ITEMS), 0);
@@ -2155,32 +2170,39 @@ void matchKeyboardCheckButtons() {
 
 void createBluetoothControllersOverlay() {
   bluetoothControllersOverlay = createPageOverlay("Device Configuration");
-  lv_obj_add_flag(bluetoothControllersOverlay, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_scroll_dir(bluetoothControllersOverlay, LV_DIR_VER);
+  // Keep the header and Save action outside the scrolling settings.
+  lv_obj_t* content = lv_obj_create(bluetoothControllersOverlay);
+  lv_obj_remove_style_all(content);
+  lv_obj_set_pos(content, 0, 50);
+  lv_obj_set_size(content, 800, 366);
+  lv_obj_add_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(content, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_AUTO);
   lv_obj_t* save = lv_button_create(bluetoothControllersOverlay);
+  deviceSaveButton = save;
   lv_obj_set_pos(save, 210, 50); lv_obj_set_size(save, 180, 46);
   lv_obj_set_style_bg_color(save, lv_color_hex(kColorCyan), 0);
   lv_obj_t* saveLabel = lv_label_create(save); registerCheckButton(save, saveLabel); lv_obj_center(saveLabel);
   lv_obj_add_event_cb(save, saveSp630eClicked, LV_EVENT_CLICKED, nullptr);
 
-  lv_obj_t* scan = lv_button_create(bluetoothControllersOverlay);
-  lv_obj_set_pos(scan, 18, 50);
+  lv_obj_t* scan = lv_button_create(content);
+  lv_obj_set_pos(scan, 18, 0);
   lv_obj_set_size(scan, 180, 46);
   lv_obj_set_style_bg_color(scan, lv_color_hex(kColorCyan), 0);
   lv_obj_add_event_cb(scan, scanSp630eClicked, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* scanLabel = lv_label_create(scan);
   lv_label_set_text(scanLabel, LV_SYMBOL_REFRESH "  Scan");
   lv_obj_center(scanLabel);
-  sp630eStatusLabel = makeLabel(bluetoothControllersOverlay,
-      "Discover SP630E Device · tap a name or icon to edit", 20, 118,
+  sp630eStatusLabel = makeLabel(content,
+      "Discover SP630E Device · tap a name or icon to edit", 20, 68,
       &lv_font_montserrat_14, kColorText);
   const uint8_t targetLabels[] = {kLabelRgbwLight1, kLabelRgbwLight2,
                                   kLabelRgbwLight3, kLabelRgbwLight4};
   for (uint8_t target = 0; target < 4; ++target) {
-    const int y = 140 + target * 57;
-    addDeviceConfigurationIdentity(bluetoothControllersOverlay,
+    const int y = 90 + target * 57;
+    addDeviceConfigurationIdentity(content,
                                    targetLabels[target], y, 130);
-    sp630eDropdowns[target] = lv_dropdown_create(bluetoothControllersOverlay);
+    sp630eDropdowns[target] = makeDropdown(content);
     lv_obj_set_pos(sp630eDropdowns[target], 210, y);
     lv_obj_set_size(sp630eDropdowns[target], 570, 46);
     lv_dropdown_set_options(sp630eDropdowns[target], "Not assigned");
@@ -2188,18 +2210,18 @@ void createBluetoothControllersOverlay() {
         LV_EVENT_VALUE_CHANGED,
         reinterpret_cast<void*>(static_cast<uintptr_t>(target)));
   }
-  makeLabel(bluetoothControllersOverlay, "Accessory assignments", 20, 374,
+  makeLabel(content, "Accessory assignments", 20, 324,
             &lv_font_montserrat_16, kColorText);
-  makeLabel(bluetoothControllersOverlay,
+  makeLabel(content,
             "Channel PWM output is either 0% (Off) or 100% (On) at 12v",
-            230, 396, &lv_font_montserrat_12, kColorText);
+            230, 346, &lv_font_montserrat_12, kColorText);
   for (uint8_t accessory = 0; accessory < 4; ++accessory) {
-    const int y = 424 + accessory * 60;
-    addDeviceConfigurationIdentity(bluetoothControllersOverlay,
+    const int y = 374 + accessory * 60;
+    addDeviceConfigurationIdentity(content,
         kLabelAccessory1 + accessory, y, 155);
 
     accessoryChannelDropdowns[accessory] =
-        lv_dropdown_create(bluetoothControllersOverlay);
+        makeDropdown(content);
     lv_obj_set_pos(accessoryChannelDropdowns[accessory], 240, y);
     lv_obj_set_size(accessoryChannelDropdowns[accessory], 540, 46);
     lv_dropdown_set_options(accessoryChannelDropdowns[accessory],
@@ -2210,11 +2232,11 @@ void createBluetoothControllersOverlay() {
 
 
   }
-  makeLabel(bluetoothControllersOverlay, "Dashboard group", 20, 676,
+  makeLabel(content, "Dashboard group", 20, 626,
             &lv_font_montserrat_16, kColorText);
-  addDeviceConfigurationIdentity(bluetoothControllersOverlay,
-                                 kLabelAllRgbwLights, 700, 300);
-  lv_obj_t* lightGroupCard = makeCard(bluetoothControllersOverlay, 18, 756, 762, 146);
+  addDeviceConfigurationIdentity(content,
+                                 kLabelAllRgbwLights, 650, 300);
+  lv_obj_t* lightGroupCard = makeCard(content, 18, 706, 762, 146);
   makeLabel(lightGroupCard, "Choose the lights included in this group", 18, 14,
             &lv_font_montserrat_14, kColorText);
   for (uint8_t i = 0; i < 4; ++i) {
@@ -2225,9 +2247,9 @@ void createBluetoothControllersOverlay() {
     lv_obj_add_state(lightGroupChecks[i], LV_STATE_CHECKED);
     lv_obj_add_event_cb(lightGroupChecks[i], lightGroupChanged, LV_EVENT_VALUE_CHANGED, nullptr);
   }
-  lv_obj_t* bottomClearance = lv_obj_create(bluetoothControllersOverlay);
+  lv_obj_t* bottomClearance = lv_obj_create(content);
   lv_obj_remove_style_all(bottomClearance);
-  lv_obj_set_pos(bottomClearance, 0, 916);
+  lv_obj_set_pos(bottomClearance, 0, 866);
   lv_obj_set_size(bottomClearance, 1, 24);
 }
 
@@ -2247,12 +2269,6 @@ void openSystemInfo(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   lv_obj_remove_flag(systemInfoOverlay, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(systemInfoOverlay);
-}
-
-void openAbout(lv_event_t* event) {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(aboutOverlay, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_foreground(aboutOverlay);
 }
 
 void openLabelConfiguration(lv_event_t* event) {
@@ -2951,7 +2967,7 @@ void createCerboWifiOverlay() {
   cerboWifiOverlay = createPageOverlay("Victron Cerbo GX");
   makeLabel(cerboWifiOverlay, "Cerbo hotspot name (SSID)", 20, 53,
             &lv_font_montserrat_14, kColorMuted);
-  cerboWifiSsid = lv_textarea_create(cerboWifiOverlay);
+  cerboWifiSsid = makeTextArea(cerboWifiOverlay);
   lv_obj_set_pos(cerboWifiSsid, 20, 76);
   lv_obj_set_size(cerboWifiSsid, 300, 48);
   lv_textarea_set_one_line(cerboWifiSsid, true);
@@ -2962,7 +2978,7 @@ void createCerboWifiOverlay() {
 
   makeLabel(cerboWifiOverlay, "Password", 340, 53,
             &lv_font_montserrat_14, kColorMuted);
-  cerboWifiPassword = lv_textarea_create(cerboWifiOverlay);
+  cerboWifiPassword = makeTextArea(cerboWifiOverlay);
   lv_obj_set_pos(cerboWifiPassword, 340, 76);
   lv_obj_set_size(cerboWifiPassword, 210, 48);
   lv_textarea_set_one_line(cerboWifiPassword, true);
@@ -2974,7 +2990,7 @@ void createCerboWifiOverlay() {
 
   makeLabel(cerboWifiOverlay, "VE.Bus ID", 570, 53,
             &lv_font_montserrat_14, kColorMuted);
-  cerboVebusUnitId = lv_textarea_create(cerboWifiOverlay);
+  cerboVebusUnitId = makeTextArea(cerboWifiOverlay);
   lv_obj_set_pos(cerboVebusUnitId, 570, 76);
   lv_obj_set_size(cerboVebusUnitId, 80, 48);
   lv_textarea_set_one_line(cerboVebusUnitId, true);
@@ -3030,8 +3046,8 @@ void createHotspotOverlay() {
   hotspotOverlay=createPageOverlay("System hotspot");
   makeLabel(hotspotOverlay,"Hotspot name (SSID)",20,53,&lv_font_montserrat_16,kColorText);
   makeLabel(hotspotOverlay,"Password",340,53,&lv_font_montserrat_16,kColorText);
-  hotspotSsid=lv_textarea_create(hotspotOverlay);
-  hotspotPassword=lv_textarea_create(hotspotOverlay);
+  hotspotSsid=makeTextArea(hotspotOverlay);
+  hotspotPassword=makeTextArea(hotspotOverlay);
   for (lv_obj_t* field : {hotspotSsid,hotspotPassword}) {
     lv_obj_set_size(field,300,48);
     lv_textarea_set_one_line(field,true);
@@ -3092,7 +3108,7 @@ void createRvcFanOverlay() {
   makeLabel(card, "Connection", 20, 86, &lv_font_montserrat_14, kColorText);
   makeLabel(card, "Fan instance", 275, 86, &lv_font_montserrat_14, kColorText);
   makeLabel(card, "Preferred controller address", 488, 86, &lv_font_montserrat_14, kColorText);
-  rvcEnabled = lv_dropdown_create(card); rvcInstance = lv_dropdown_create(card); rvcSource = lv_dropdown_create(card);
+  rvcEnabled = makeDropdown(card); rvcInstance = makeDropdown(card); rvcSource = makeDropdown(card);
   lv_dropdown_set_options(rvcEnabled, "Disabled\nEnabled");
   String instances, sources;
   for (unsigned i = 1; i <= 250; ++i) { if (i > 1) instances += '\n'; instances += i; }
@@ -3423,7 +3439,7 @@ void createSettingsOverlay() {
   lv_obj_set_scrollbar_mode(displaySettingsOverlay, LV_SCROLLBAR_MODE_AUTO);
   auto dropdown = [](lv_obj_t* parent, const char* options, int x, int y, int width,
                      unsigned selected, lv_event_cb_t callback) {
-    auto* control = lv_dropdown_create(parent);
+    auto* control = makeDropdown(parent);
     lv_dropdown_set_options(control, options); lv_dropdown_set_selected(control, selected);
     lv_obj_set_pos(control, x, y); lv_obj_set_size(control, width, 42);
     lv_obj_set_style_bg_color(control, lv_color_hex(kColorSurface), 0);
@@ -3558,7 +3574,7 @@ void createLabelConfigurationOverlays() {
   labelEditorOverlay = createPageOverlay("Edit device");
   labelEditorTitle = makeLabel(labelEditorOverlay, "Name", 22, 56,
                                &lv_font_montserrat_16, kColorMuted);
-  labelEditorTextArea = lv_textarea_create(labelEditorOverlay);
+  labelEditorTextArea = makeTextArea(labelEditorOverlay);
   lv_obj_set_pos(labelEditorTextArea, 20, 82);
   lv_obj_set_size(labelEditorTextArea, 220, 54);
   lv_textarea_set_one_line(labelEditorTextArea, true);
@@ -3592,7 +3608,7 @@ void createLabelConfigurationOverlays() {
   labelEditorOrderLabel = makeLabel(
       labelEditorOverlay, "Order", 430, 56,
       &lv_font_montserrat_14, kColorMuted);
-  labelEditorOrderDropdown = lv_dropdown_create(labelEditorOverlay);
+  labelEditorOrderDropdown = makeDropdown(labelEditorOverlay);
   lv_obj_set_pos(labelEditorOrderDropdown, 428, 82);
   lv_obj_set_size(labelEditorOrderDropdown, 182, 54);
   lv_dropdown_set_options(labelEditorOrderDropdown,
@@ -3695,43 +3711,35 @@ void createLabelConfigurationOverlays() {
   lv_obj_add_flag(iconPickerOverlay, LV_OBJ_FLAG_HIDDEN);
 }
 
-void createAboutOverlay() {
-  aboutOverlay = createPageOverlay("About");
-  lv_obj_t* card = makeCard(aboutOverlay, 16, 65, 768, 280);
-  makeLabel(card, "BlueSquid Camper Control", 24, 22,
-            &lv_font_montserrat_24, kColorCyan);
-  auto* description = makeLabel(card,
-      "Lighting, accessories and camper monitoring\nin one place.",
-      24, 70, &lv_font_montserrat_16, kColorText);
-  lv_obj_set_width(description, 712);
-  makeLabel(card, "Created by Christian C. (boboxx)", 24, 136,
-            &lv_font_montserrat_16, kColorText);
-  makeLabel(card, "github.com/boboxx/BlueSquid", 24, 172,
-            &lv_font_montserrat_16, kColorMuted);
-  auto* version = makeLabel(card, "", 24, 220,
-                            &lv_font_montserrat_16, kColorMuted);
-  lv_label_set_text_fmt(version, "Touchscreen firmware %s",
-                        AppConfig::kFirmwareVersion);
-}
-
 void createSystemInfoOverlay() {
   systemInfoOverlay = createPageOverlay("System information");
-  lv_obj_t* card = makeCard(systemInfoOverlay, 16, 65, 768, 315);
+  lv_obj_t* card = makeCard(systemInfoOverlay, 16, 65, 768, 335);
   lv_obj_add_flag(card, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(card, LV_DIR_VER);
-  addSystemInfoRow(card, 0, "Touchscreen firmware",
+  lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_AUTO);
+  lv_obj_set_style_pad_bottom(card, 16, 0);
+  makeLabel(card, AppConfig::kProductName, 24, 18,
+            &lv_font_montserrat_24, kColorCyan);
+  auto* description = makeLabel(card,
+      "Lighting, accessories and camper monitoring in one place.",
+      24, 58, &lv_font_montserrat_16, kColorText);
+  lv_obj_set_width(description, 712);
+  makeLabel(card, "Created by Christian Charette", 24, 90,
+            &lv_font_montserrat_16, kColorText);
+  makeLabel(card, "github.com/boboxx/BlueSquid", 24, 120,
+            &lv_font_montserrat_16, kColorMuted);
+  addSystemInfoRow(card, 160, "Touchscreen firmware",
                    AppConfig::kFirmwareVersion, true);
   systemRearFirmwareLabel =
-      addSystemInfoRow(card, 50, "Controller firmware", "--", true);
+      addSystemInfoRow(card, 210, "Controller firmware", "--", true);
   char protocol[24]{};
   snprintf(protocol, sizeof(protocol), "BlueSquid v%u",
            BlueSquidControl::kProtocolVersion);
-  addSystemInfoRow(card, 100, "Control protocol", protocol, true);
+  addSystemInfoRow(card, 260, "Control protocol", protocol, true);
   systemConnectionLabel =
-      addSystemInfoRow(card, 200, "Controller connection", "Offline", true);
+      addSystemInfoRow(card, 310, "Controller connection", "Offline", true);
   systemUptimeLabel =
-      addSystemInfoRow(card, 250, "Controller uptime", "--", false);
-
+      addSystemInfoRow(card, 360, "Controller uptime", "--", false);
 }
 
 void syncButton(lv_obj_t* button, lv_obj_t* stateLabel, bool enabled,
@@ -3751,10 +3759,10 @@ void syncButton(lv_obj_t* button, lv_obj_t* stateLabel, bool enabled,
   lv_obj_set_style_text_color(iconLabel,
       lv_color_hex(enabled ? kColorControlText : accent), 0);
   lv_obj_set_style_text_color(titleLabel,
-      lv_color_hex(enabled ? kColorControlText : kColorText), 0);
+      lv_color_hex(kColorText), 0);
   lv_label_set_text(stateLabel, enabled ? "On" : "Off");
   lv_obj_set_style_text_color(stateLabel,
-      lv_color_hex(enabled ? kColorControlMuted : kColorMuted), 0);
+      lv_color_hex(kColorMuted), 0);
 }
 
 void setActionAvailable(lv_obj_t* button, bool available) {
@@ -3892,6 +3900,8 @@ void buildUi() {
   lv_obj_t* controls = lv_tabview_add_tab(tabs, "Control");
   lv_obj_t* power = lv_tabview_add_tab(tabs, "Power");
   lv_obj_t* menu = lv_tabview_add_tab(tabs, "Menu");
+  lv_obj_add_event_cb(lv_tabview_get_tab_button(tabs, 4), menuTabClicked,
+                      LV_EVENT_CLICKED, nullptr);
   styleTabButtons(tabs);
   syncTabButtonLabels(tabs);
   lv_obj_t* pages[] = {home, lights, controls, power, menu};
@@ -3994,13 +4004,11 @@ void buildUi() {
   addMenuRow(menuPanel, 134, LV_SYMBOL_SETTINGS, "System Configuration", "Device assignments, backup and restore", kColorGreen, true);
   addMenuRow(menuPanel, 201, LV_SYMBOL_REFRESH, "Camper Position", "Pitch, roll and level calibration", kColorCyan, true);
   addMenuRow(menuPanel, 268, LV_SYMBOL_EYE_OPEN, "Display", "Brightness, sleep and overnight schedule", kColorAmber, true);
-  addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "Firmware and link diagnostics", kColorMuted, true);
-  addMenuRow(menuPanel, 402, LV_SYMBOL_HOME, "About", "About BlueSquid Camper Control", kColorCyan, false);
+  addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "About BlueSquid, firmware and diagnostics", kColorMuted, false);
   addMenuHitTarget(menuPanel, 134, openSettings);
   addMenuHitTarget(menuPanel, 201, openCamperPosition);
   addMenuHitTarget(menuPanel, 268, openDisplaySettings);
   addMenuHitTarget(menuPanel, 335, openSystemInfo);
-  addMenuHitTarget(menuPanel, 402, openAbout);
 
   createColorDialog();
   createSettingsOverlay();
@@ -4010,7 +4018,6 @@ void buildUi() {
   createRvcFanOverlay();
   createLabelConfigurationOverlays();
   createSystemInfoOverlay();
-  createAboutOverlay();
   matchKeyboardCheckButtons();
   lv_obj_add_event_cb(tabs, tabNavigationChanged,
                       LV_EVENT_VALUE_CHANGED, nullptr);

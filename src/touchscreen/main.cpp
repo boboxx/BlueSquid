@@ -319,6 +319,7 @@ lv_obj_t* labelConfigIconLabels[kDeviceLabelCount]{};
 lv_obj_t* labelEditorIconLabel = nullptr;
 lv_obj_t* iconPickerOverlay = nullptr;
 lv_obj_t* systemInfoOverlay = nullptr;
+lv_obj_t* aboutOverlay = nullptr;
 lv_obj_t* systemConnectionLabel = nullptr;
 lv_obj_t* systemRearFirmwareLabel = nullptr;
 lv_obj_t* systemUptimeLabel = nullptr;
@@ -1757,6 +1758,9 @@ void tabNavigationChanged(lv_event_t* event) {
   if (systemInfoOverlay != nullptr) {
     lv_obj_add_flag(systemInfoOverlay, LV_OBJ_FLAG_HIDDEN);
   }
+  if (aboutOverlay != nullptr) {
+    lv_obj_add_flag(aboutOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
   if (labelConfigOverlay != nullptr) {
     lv_obj_add_flag(labelConfigOverlay, LV_OBJ_FLAG_HIDDEN);
   }
@@ -2243,6 +2247,12 @@ void openSystemInfo(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   lv_obj_remove_flag(systemInfoOverlay, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(systemInfoOverlay);
+}
+
+void openAbout(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  lv_obj_remove_flag(aboutOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(aboutOverlay);
 }
 
 void openLabelConfiguration(lv_event_t* event) {
@@ -3685,6 +3695,25 @@ void createLabelConfigurationOverlays() {
   lv_obj_add_flag(iconPickerOverlay, LV_OBJ_FLAG_HIDDEN);
 }
 
+void createAboutOverlay() {
+  aboutOverlay = createPageOverlay("About");
+  lv_obj_t* card = makeCard(aboutOverlay, 16, 65, 768, 280);
+  makeLabel(card, "BlueSquid Camper Control", 24, 22,
+            &lv_font_montserrat_24, kColorCyan);
+  auto* description = makeLabel(card,
+      "Lighting, accessories and camper monitoring\nin one place.",
+      24, 70, &lv_font_montserrat_16, kColorText);
+  lv_obj_set_width(description, 712);
+  makeLabel(card, "Created by Christian C. (boboxx)", 24, 136,
+            &lv_font_montserrat_16, kColorText);
+  makeLabel(card, "github.com/boboxx/BlueSquid", 24, 172,
+            &lv_font_montserrat_16, kColorMuted);
+  auto* version = makeLabel(card, "", 24, 220,
+                            &lv_font_montserrat_16, kColorMuted);
+  lv_label_set_text_fmt(version, "Touchscreen firmware %s",
+                        AppConfig::kFirmwareVersion);
+}
+
 void createSystemInfoOverlay() {
   systemInfoOverlay = createPageOverlay("System information");
   lv_obj_t* card = makeCard(systemInfoOverlay, 16, 65, 768, 315);
@@ -3965,11 +3994,13 @@ void buildUi() {
   addMenuRow(menuPanel, 134, LV_SYMBOL_SETTINGS, "System Configuration", "Device assignments, backup and restore", kColorGreen, true);
   addMenuRow(menuPanel, 201, LV_SYMBOL_REFRESH, "Camper Position", "Pitch, roll and level calibration", kColorCyan, true);
   addMenuRow(menuPanel, 268, LV_SYMBOL_EYE_OPEN, "Display", "Brightness, sleep and overnight schedule", kColorAmber, true);
-  addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "Firmware and link diagnostics", kColorMuted, false);
+  addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "Firmware and link diagnostics", kColorMuted, true);
+  addMenuRow(menuPanel, 402, LV_SYMBOL_HOME, "About", "About BlueSquid Camper Control", kColorCyan, false);
   addMenuHitTarget(menuPanel, 134, openSettings);
   addMenuHitTarget(menuPanel, 201, openCamperPosition);
   addMenuHitTarget(menuPanel, 268, openDisplaySettings);
   addMenuHitTarget(menuPanel, 335, openSystemInfo);
+  addMenuHitTarget(menuPanel, 402, openAbout);
 
   createColorDialog();
   createSettingsOverlay();
@@ -3979,6 +4010,7 @@ void buildUi() {
   createRvcFanOverlay();
   createLabelConfigurationOverlays();
   createSystemInfoOverlay();
+  createAboutOverlay();
   matchKeyboardCheckButtons();
   lv_obj_add_event_cb(tabs, tabNavigationChanged,
                       LV_EVENT_VALUE_CHANGED, nullptr);

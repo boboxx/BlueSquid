@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include "AppConfig.h"
 #include "LightSwitchManager.h"
+#include "RgbwBleDriverManager.h"
+#include "Sp630eChannels.h"
 #include "../../src/touchscreen/TouchRemoteStatus.h"
 
 static_assert(sizeof(PersistentDeviceState) == 41, "Keep saved device records readable");
@@ -17,8 +19,99 @@ void pinMode(int pin, int mode) {
   if (pin == 35) assert(mode == INPUT_PULLUP);
 }
 uint8_t SettingsManager::loadLightGroupMask() { return 15; }
-bool SettingsManager::loadDeviceState(PersistentDeviceState&) { return false; }
-bool SettingsManager::saveDeviceState(const PersistentDeviceState&) { return true; }
+PersistentDeviceState savedState;
+bool restoreSaved = false;
+bool SettingsManager::loadDeviceState(PersistentDeviceState& state) {
+  if (restoreSaved) state = savedState;
+  return restoreSaved;
+}
+bool SettingsManager::saveDeviceState(const PersistentDeviceState& state) {
+  savedState = state; return true;
+}
+
+struct GroupAdapter : RgbwBleDriverAdapter {
+  RgbwBleDriverState sent{}, feedback{};
+  uint32_t revision = 0;
+  bool valid = false;
+  void begin() override {}
+  void update() override {}
+  bool ready() const override { return true; }
+  bool available() const override { return true; }
+  bool send(const RgbwBleDriverState& state) override {
+    sent = state; valid = false; return true;
+  }
+  bool reported(RgbwBleDriverState& state, uint32_t& rev) const override {
+    state = feedback; rev = revision; return valid;
+  }
+  void reportOff() {
+    feedback = {}; feedback.options = 1; // Hardware off mode is RGB, even after CW.
+    valid = true; ++revision;
+  }
+};
+
+void press(LightSwitchManager& button);
+
+void groupPreservesSelectedChannels() {
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
+  GroupAdapter rgb, cct, excluded;
+  RgbwBleDriverManager manager(outputs);
+  manager.setAdapter(0, &rgb, Sp630eChannels::rgbOnly);
+  manager.setAdapter(1, &cct);
+  manager.setAdapter(2, &excluded, 1); // A single-channel assignment outside group.
+  outputs.setLightGroupMask(3);
+  const uint8_t off[4]{};
+  const uint8_t colour[3] = {100, 25, 50};
+  outputs.setRgbwState(RgbwZone::Output1, off, colour, 20, 1);
+  outputs.setRgbwState(RgbwZone::Output2, off, colour, 35, 4);
+  manager.begin();
+  auto flush = [&]() { manager.update(); nowMs += 150; manager.update(); };
+  // Dashboard and physical switch invoke the same group command.
+  outputs.setAllLightsEnabled(true); flush();
+  assert(rgb.sent.channels[0] == 100 && rgb.sent.channels[1] == 25);
+  assert(rgb.sent.channels[2] == 50 && rgb.sent.channels[3] == 0);
+  assert(cct.sent.channels[4] == 100 && cct.sent.channels[3] == 0);
+  assert(cct.sent.channels[0] == 0 && excluded.sent.channels[1] == 0);
+  LightSwitchManager button(outputs); button.begin(); press(button); flush();
+  assert(!outputs.anyLightsEnabled());
+  rgb.reportOff(); cct.reportOff(); manager.update();
+  assert(outputs.status().rgbwOptions[1] == 4);
+  press(button); flush();
+  assert(rgb.sent.channels[1] == 25 && cct.sent.channels[4] == 100);
+  assert(cct.sent.channels[3] == 0);
+  // RGB + CW stays selected, with no unexpected WW output.
+  outputs.setRgbwPresetField(RgbwZone::Output2, 4, 5);
+  outputs.setAllLightsEnabled(false); flush();
+  cct.reportOff(); manager.update();
+  outputs.setAllLightsEnabled(true); flush();
+  assert(cct.sent.channels[0] == 100 && cct.sent.channels[1] == 25);
+  assert(cct.sent.channels[4] == 100 && cct.sent.channels[3] == 0);
+  // Individual UI off clears active option bits; remember the selection,
+  // including across device-state persistence, for the next group command.
+  outputs.setRgbwState(RgbwZone::Output2, off, colour, 35, 0); flush();
+  cct.reportOff(); manager.update();
+  nowMs += 3100; outputs.update();
+  assert(savedState.rgbwOptions[1] == 5);
+  restoreSaved = true;
+  OutputController rebooted(events, settings); rebooted.begin();
+  restoreSaved = false;
+  rebooted.setRgbwExternal(1, true); rebooted.setLightGroupMask(2);
+  rebooted.setAllLightsEnabled(true);
+  assert(rebooted.status().rgbw[1][0] == 100 && rebooted.status().rgbw[1][3] == 100);
+  assert(rebooted.status().rgbwOptions[1] == 5);
+}
+
+void channelCommandKeepsWhiteTone() {
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
+  const uint8_t off[4]{};
+  const uint8_t colour[3]{};
+  outputs.setRgbwState(RgbwZone::Output1, off, colour, 50, 4);  // Cool white.
+  // Per-channel commands and scenes set only the shared white channel.
+  outputs.setRgbwChannel(RgbwZone::Output1, 3, 60);
+  nowMs += AppConfig::kRgbwCommandSettleMs; outputs.update();
+  assert(outputs.status().rgbwOptions[0] == 4);
+}
 
 void press(LightSwitchManager& button) {
   switchLevel = LOW;
@@ -28,6 +121,33 @@ void press(LightSwitchManager& button) {
   nowMs += 1000; assert(!button.update()); // held switch cannot repeat
   switchLevel = HIGH; assert(!button.update());
   nowMs += 50; assert(!button.update()); // release cannot toggle
+}
+
+void defaultColourIsWhite() {
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
+  for (uint8_t zone = 0; zone < 4; ++zone)
+    for (uint8_t channel = 0; channel < 3; ++channel)
+      assert(outputs.status().rgb[zone][channel] == 100);
+}
+
+void holdOpensPairing() {
+  EventManager events; SettingsManager settings;
+  OutputController outputs(events, settings); outputs.begin();
+  outputs.setRgbwExternal(0, true); outputs.setLightGroupMask(1);
+  LightSwitchManager button(outputs); button.begin();
+  switchLevel = LOW; button.update();
+  nowMs += 50; assert(button.update() && outputs.anyLightsEnabled());
+  assert(!button.consumePairingRequest());
+  nowMs += AppConfig::Outputs::kPairingHoldMs - 1; assert(!button.update());
+  nowMs += 1; assert(button.update());
+  // The hold restores the lights and requests pairing exactly once.
+  assert(!outputs.anyLightsEnabled());
+  assert(button.consumePairingRequest() && !button.consumePairingRequest());
+  nowMs += 10000; assert(!button.update());
+  switchLevel = HIGH; button.update(); nowMs += 50; assert(!button.update());
+  // A normal press afterwards still toggles.
+  press(button); assert(outputs.anyLightsEnabled());
 }
 
 void lightGroupToggle() {
@@ -157,6 +277,12 @@ void configurationBatchValidation() {
   assert(!parseSp630eConfiguration("16|", rows, group));
   assert(!parseSp630eConfiguration("1|0,0,invalid;", rows, group));
   assert(!parseSp630eConfiguration("1|0,0,none;", rows, group));
+  // Full strips with chosen outputs (here RGB + cool white, 0xF5 = 245).
+  const char* outputs = "1|0,245,AA:BB:CC:DD:EE:FF;1,0,none;2,0,none;3,0,none;4,0,none;5,0,none;6,0,none;7,0,none;";
+  assert(parseSp630eConfiguration(outputs, rows, group) && rows[0].channel == 245);
+  // An accessory can never take a full-strip assignment.
+  const char* accessory = "1|0,0,none;1,0,none;2,0,none;3,0,none;4,245,AA:BB:CC:DD:EE:FF;5,0,none;6,0,none;7,0,none;";
+  assert(!parseSp630eConfiguration(accessory, rows, group));
 }
 
 void fanRequiresRvcHandler() {
@@ -173,7 +299,7 @@ void fanRequiresRvcHandler() {
   assert(!outputs.setFanReverse(true));
 }
 
-int main() { fanRequiresRvcHandler(); configurableGroup(); configurationBatchValidation();
+int main() { groupPreservesSelectedChannels(); channelCommandKeepsWhiteTone(); holdOpensPairing(); defaultColourIsWhite(); fanRequiresRvcHandler(); configurableGroup(); configurationBatchValidation();
   homeGroupStatusAndPhysicalToggle();
   lightGroupToggle(); allFourRgbwLights(); unassignedRgbwDoesNotHoldToggleOn();
   puts("GPIO 35 all-lights tests passed");

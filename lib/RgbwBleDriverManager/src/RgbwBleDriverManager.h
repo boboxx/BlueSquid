@@ -33,7 +33,7 @@ class RgbwBleDriverManager {
                            uint8_t channel);
   void clearAssignments();
   void begin();
-  void update();
+  bool update(); // True when device feedback changes a published output.
   void availability(uint8_t& assigned, uint8_t& available) const;
 
  private:
@@ -62,6 +62,7 @@ class RgbwBleDriverManager {
   bool pending_[kAdapterCount]{};
   uint32_t reportRevision_[kAdapterCount]{};
   void applyReport(RgbwBleDriverAdapter* adapter, const RgbwBleDriverState& state);
+  bool hostsAccessory(const RgbwBleDriverAdapter* adapter) const;
 
   void registerAdapter(RgbwBleDriverAdapter* adapter);
 };

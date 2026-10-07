@@ -7,7 +7,8 @@
 
 struct PersistentDeviceState {
   uint8_t rgbwLevel[4][4]{};
-  uint8_t rgb[4][3]{{100, 0, 0}, {100, 0, 0}, {100, 0, 0}, {100, 0, 0}};
+  // Default colour preset: full red, green and blue (white).
+  uint8_t rgb[4][3]{{100, 100, 100}, {100, 100, 100}, {100, 100, 100}, {100, 100, 100}};
   uint8_t rgbwBrightness[4]{100, 100, 100, 100};
   // Bits 0/1/2: colour, warm white, cool white selected.
   uint8_t rgbwOptions[4]{2, 2, 2, 2};

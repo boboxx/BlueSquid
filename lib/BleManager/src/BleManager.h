@@ -2,9 +2,11 @@
 
 #include <Arduino.h>
 
+#include <atomic>
 #include <string>
 
 #include "BatteryManager.h"
+#include "BleBondGuard.h"
 #include "CerboWifiManager.h"
 #include "EventManager.h"
 #include "OutputController.h"
@@ -32,6 +34,7 @@ class BleManager {
   void update();
   void publishStatus(const SystemStatus& status);
   bool isClientConnected() const;
+  void openPairingWindow();
   uint8_t connectedClientCount() const;
 
  private:
@@ -44,8 +47,11 @@ class BleManager {
   struct ConnectedClient {
     uint16_t connectionHandle = 0xFFFF;
     uint32_t lastActivityMs = 0;
+    uint32_t connectedMs = 0;
     bool primary = false;
     bool connected = false;
+    bool verifyPending = false;
+    bool trusted = false;
   };
 
   static constexpr uint8_t kCommandQueueCapacity = 16;
@@ -58,7 +64,19 @@ class BleManager {
   friend class BleStatusCallbacks;
   friend class BleTouchCommandCallbacks;
   friend class BleTouchSnapshotCallbacks;
+  friend class BleOtaCredentialsCallbacks;
+  friend class BleOtaLinkCallbacks;
 
+  struct ConfigWrite {
+    uint16_t connectionHandle = 0xFFFF;
+    bool discovery = false;
+    char text[320]{};
+  };
+  void queueConfigWrite(uint16_t connectionHandle, bool discovery,
+                        const std::string& value);
+  void processConfigWrites();
+  void handleConfigWrite(const std::string& value);
+  void handleDiscoveryWrite(const std::string& value);
   void setBatteryCapacityConfig(const std::string& value);
   void requestSp630eDiscovery();
   void setSp630eConfig(const std::string& value);
@@ -77,10 +95,13 @@ class BleManager {
   void processTouchCommand();
   void acknowledgeTouchCommand(uint16_t connectionHandle, uint16_t sequence,
                                uint8_t command, uint8_t target,
-                               uint8_t result);
+                               uint8_t result, bool nextSnapshot = false);
   void registerClient(uint16_t connectionHandle);
   void unregisterClient(uint16_t connectionHandle);
   void recordClientActivity(uint16_t connectionHandle);
+  void requestClientVerification(uint16_t connectionHandle);
+  void verifyClients();
+  bool clientTrusted(uint16_t connectionHandle) const;
   void setClientPrimary(uint16_t connectionHandle, bool primary);
   void disconnectIdleClients();
   void maintainAdvertising();
@@ -102,9 +123,15 @@ class BleManager {
   SystemStatus latestStatus_ = {};
   String latestDiscoveryPayload_;
   bool hasLatestStatus_ = false;
+  // GATT callbacks run in the NimBLE task; settings, Wi-Fi and the discovery
+  // payload belong to the main loop, so callbacks only queue work for it.
+  QueueHandle_t configWrites_ = nullptr;
+  std::atomic_bool statusRefreshRequested_{false};
   bool sp630eDiscoveryRequested_ = false;
   bool sp630eDiscoveryRunning_ = false;
   bool restartRequested_ = false;
+  bool factoryResetRequested_ = false;
+  uint32_t factoryResetRequestedMs_ = 0;
   uint32_t sp630eDiscoveryStartedMs_ = 0;
   uint32_t lastAdvertisingCheckMs_ = 0;
   uint32_t lastAdvertisingDiagnosticMs_ = 0;
@@ -127,5 +154,6 @@ class BleManager {
   uint8_t commandQueueTail_ = 0;
   uint8_t commandQueueCount_ = 0;
   portMUX_TYPE commandQueueMux_ = portMUX_INITIALIZER_UNLOCKED;
-  portMUX_TYPE clientMux_ = portMUX_INITIALIZER_UNLOCKED;
+  mutable portMUX_TYPE clientMux_ = portMUX_INITIALIZER_UNLOCKED;
+  BleBondGuard bondGuard_;
 };

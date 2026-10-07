@@ -13,15 +13,15 @@ namespace AppConfig {
 constexpr char kProductName[] = "BlueSquid Camper Control";
 // Independent device releases. The build selects the version for this target.
 #if defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
-constexpr char kFirmwareVersion[] = "1.0.40";
+constexpr char kFirmwareVersion[] = "1.0.50";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 40;
+constexpr uint8_t kFirmwareVersionPatch = 50;
 #else
-constexpr char kFirmwareVersion[] = "1.0.29";
+constexpr char kFirmwareVersion[] = "1.0.38";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 29;
+constexpr uint8_t kFirmwareVersionPatch = 38;
 #endif
 constexpr char kBleDeviceName[] = "BlueSquid";
 
@@ -41,6 +41,7 @@ constexpr char kBmsDiscoveryUuid[] = "7D8B1004-8A75-4E41-9A6A-35D0A7A18B01";
 constexpr uint8_t kProtocolVersion = 2;
 constexpr size_t kStatusPacketSize = 64;
 constexpr uint32_t kSecondaryClientIdleTimeoutMs = 5UL * 60UL * 1000UL;
+constexpr uint32_t kUntrustedClientTimeoutMs = 30UL * 1000UL;
 }  // namespace Ble
 
 namespace Battery {
@@ -165,6 +166,7 @@ constexpr uint32_t kRgbwPwmFrequencyHz = 1000;
 constexpr int kAllLightsSwitchPin = BLUESQUID_ALL_LIGHTS_SWITCH_PIN;
 constexpr bool kAllLightsSwitchActiveLow = true;
 constexpr uint32_t kAllLightsSwitchDebounceMs = 50;
+constexpr uint32_t kPairingHoldMs = 5000;
 }  // namespace Outputs
 
 namespace Can {

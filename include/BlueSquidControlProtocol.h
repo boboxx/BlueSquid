@@ -23,7 +23,14 @@ enum class Command : uint8_t {
   SetInverter = 17,
   SetCharger = 18,
   SetFanReverse = 19,
+  // Opens the Controller's Bluetooth pairing window (2 minutes) so another
+  // touchscreen can pair. Only accepted from an already trusted touchscreen.
+  OpenPairing = 20,
+  // Erases all Controller settings and pairings, then restarts. The value
+  // must equal kFactoryResetConfirmation so no stray command can trigger it.
+  FactoryReset = 21,
 };
+constexpr uint16_t kFactoryResetConfirmation = 0xFAC7;
 
 inline int16_t scaled(float value, float multiplier) {
   const float converted = value * multiplier;

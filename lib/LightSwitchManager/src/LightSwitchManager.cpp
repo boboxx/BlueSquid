@@ -22,6 +22,7 @@ void LightSwitchManager::begin() {
                    : INPUT_PULLDOWN);
   rawPressed_ = readPressed();
   stablePressed_ = rawPressed_;
+  holdHandled_ = true;  // A button held or stuck at boot never opens pairing.
   initialized_ = true;
   rawStateChangedMs_ = millis();
   lightsEnabled_ = false;
@@ -48,11 +49,30 @@ bool LightSwitchManager::update() {
       // Derive the next state from the outputs so touchscreen changes and the
       // physical button cannot leave this local toggle state out of sync.
       lightsEnabled_ = !outputController_.anyLightsEnabled();
+      pressedMs_ = now;
+      holdHandled_ = false;
       apply(lightsEnabled_);
       return true;
     }
   }
+  // Holding the button opens Bluetooth pairing. Restore the lights so the
+  // press-time toggle reverts; that visible change confirms the window.
+  if (stablePressed_ && !holdHandled_ &&
+      now - pressedMs_ >= AppConfig::Outputs::kPairingHoldMs) {
+    holdHandled_ = true;
+    pairingRequested_ = true;
+    lightsEnabled_ = !lightsEnabled_;
+    apply(lightsEnabled_);
+    LOG_INFO(kTag, "Button held: Bluetooth pairing requested");
+    return true;
+  }
   return false;
+}
+
+bool LightSwitchManager::consumePairingRequest() {
+  const bool requested = pairingRequested_;
+  pairingRequested_ = false;
+  return requested;
 }
 
 bool LightSwitchManager::readPressed() const {

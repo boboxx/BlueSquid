@@ -5,6 +5,7 @@
 #include <freertos/semphr.h>
 
 #include "EventManager.h"
+#include "InverterModeRequest.h"
 #include "SettingsManager.h"
 #include "SystemTypes.h"
 
@@ -29,6 +30,7 @@ class BatteryManager {
   static void taskEntry(void* context);
   void taskLoop();
   void commitStatus(const BatteryStatus& status);
+  bool requestInverterMode(bool inverter, bool enabled);
   void updateEnergyTotals(BatteryStatus& status, uint32_t now);
 
   EventManager& eventManager_;
@@ -38,7 +40,8 @@ class BatteryManager {
   uint32_t lastEnergyMs_ = 0;
   float capacityAh_ = 0.0F;
   TaskHandle_t taskHandle_ = nullptr;
-  volatile int8_t pendingInverterMode_ = -1;
+  int8_t pendingInverterMode_ = -1;
+  InverterModeRequest modeRequest_;
   volatile uint8_t vebusUnitId_ = 227;
   CerboPort* cerbo_ = nullptr;
   mutable portMUX_TYPE statusMux_ = portMUX_INITIALIZER_UNLOCKED;

@@ -16,7 +16,10 @@
 
 namespace FirmwareUpdate {
 namespace {
-#if defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
+#if defined(BLUESQUID_TOUCHSCREEN_10IN) && BLUESQUID_TOUCHSCREEN_10IN
+constexpr uint8_t kTarget = OtaPackage::kTouchscreen10;
+constexpr char kLabel[] = "Touchscreen 10.1";
+#elif defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
 constexpr uint8_t kTarget = OtaPackage::kTouchscreen;
 constexpr char kLabel[] = "Touchscreen";
 #else

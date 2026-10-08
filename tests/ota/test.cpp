@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
   assert(OtaPackage::decode(data.data(), 64, OtaPackage::kController, 4096, metadata));
   assert(metadata.size == data.size() - 64);
   assert(!OtaPackage::decode(data.data(), 64, OtaPackage::kTouchscreen, 4096, metadata));
+  assert(!OtaPackage::decode(data.data(), 64, OtaPackage::kTouchscreen10, 4096, metadata));
   assert(!OtaPackage::decode(data.data(), 64, OtaPackage::kController, metadata.size - 1, metadata));
   for (size_t size = 0; size < 64; ++size)
     assert(!OtaPackage::decode(data.data(), size, 1, 4096, metadata));

@@ -7,6 +7,8 @@ namespace OtaPackage {
 constexpr size_t kHeaderSize = 64;
 constexpr uint8_t kController = 1;
 constexpr uint8_t kTouchscreen = 2;
+// 10.1-inch ESP32-P4 touchscreen; its images cannot run on the 7-inch ESP32-S3.
+constexpr uint8_t kTouchscreen10 = 3;
 struct Metadata {
   uint32_t size = 0;
   uint8_t sha256[32]{};

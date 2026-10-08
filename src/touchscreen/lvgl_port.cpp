@@ -12,6 +12,11 @@
 
 #include <atomic>
 
+#if BLUESQUID_TOUCHSCREEN_10IN
+#include "driver/ppa.h"
+#include "esp_cache.h"
+#endif
+
 using esp_panel::drivers::LCD;
 using esp_panel::drivers::Touch;
 using esp_panel::drivers::TouchPoint;
@@ -41,6 +46,131 @@ std::atomic_bool touchActivityPending{false};
 std::atomic_bool wakeRequestPending{false};
 std::atomic_bool suppressWakeGesture{false};
 std::atomic_uint32_t wakeGestureStartedMs{0};
+
+#if BLUESQUID_TOUCHSCREEN_10IN
+// The 10.1-inch panel is 800x1280 portrait. The UI keeps the 7-inch 800x480
+// layout; the PPA scales it by 25/16 (exact in the PPA's 1/16 steps) and
+// rotates it into landscape, leaving a thin black border.
+#ifndef BLUESQUID_P4_DISPLAY_ROTATION
+#define BLUESQUID_P4_DISPLAY_ROTATION 90
+#endif
+static_assert(BLUESQUID_P4_DISPLAY_ROTATION == 90 ||
+                  BLUESQUID_P4_DISPLAY_ROTATION == 270,
+              "BLUESQUID_P4_DISPLAY_ROTATION must be 90 or 270");
+constexpr int32_t kLogicalWidth = 800;
+constexpr int32_t kLogicalHeight = 480;
+constexpr int32_t kPanelWidth = 800;
+constexpr int32_t kPanelHeight = 1280;
+constexpr int32_t kLandscapeWidth = kPanelHeight;
+constexpr int32_t kLandscapeHeight = kPanelWidth;
+constexpr int32_t kScaleNumerator = 25;
+constexpr int32_t kScaleDenominator = 16;
+constexpr int32_t kOffsetX =
+    (kLandscapeWidth - kLogicalWidth * kScaleNumerator / kScaleDenominator) / 2;
+constexpr int32_t kOffsetY =
+    (kLandscapeHeight - kLogicalHeight * kScaleNumerator / kScaleDenominator) / 2;
+constexpr size_t kPanelFrameBytes = size_t(kPanelWidth) * kPanelHeight * 2;
+static_assert(kLogicalWidth % kScaleDenominator == 0 &&
+                  kLogicalHeight % kScaleDenominator == 0,
+              "Scaled areas must map to whole output pixels");
+
+ppa_client_handle_t scaler = nullptr;
+void* panelFrame = nullptr;
+void* renderFrame = nullptr;
+
+int32_t scaled(int32_t value) {
+  return value * kScaleNumerator / kScaleDenominator;
+}
+
+// Fractional scaling would leave seams between separately flushed areas.
+// Align every redraw to the scale denominator so each maps to whole pixels.
+void alignInvalidArea(lv_event_t* event) {
+  auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
+  area->x1 &= ~(kScaleDenominator - 1);
+  area->y1 &= ~(kScaleDenominator - 1);
+  area->x2 |= kScaleDenominator - 1;
+  area->y2 |= kScaleDenominator - 1;
+}
+
+void flushScaled(lv_display_t* displayDriver, const lv_area_t* area,
+                 uint8_t*) {
+  const int32_t width = area->x2 - area->x1 + 1;
+  const int32_t height = area->y2 - area->y1 + 1;
+  const int32_t x = kOffsetX + scaled(area->x1);
+  const int32_t y = kOffsetY + scaled(area->y1);
+  const int32_t outWidth = scaled(width);
+  const int32_t outHeight = scaled(height);
+  ppa_srm_oper_config_t operation{};
+  operation.in.buffer = renderFrame;
+  operation.in.pic_w = kLogicalWidth;
+  operation.in.pic_h = kLogicalHeight;
+  operation.in.block_w = width;
+  operation.in.block_h = height;
+  operation.in.block_offset_x = area->x1;
+  operation.in.block_offset_y = area->y1;
+  operation.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+  operation.out.buffer = panelFrame;
+  operation.out.buffer_size = kPanelFrameBytes;
+  operation.out.pic_w = kPanelWidth;
+  operation.out.pic_h = kPanelHeight;
+  // PPA rotation is counter-clockwise.
+#if BLUESQUID_P4_DISPLAY_ROTATION == 90
+  operation.rotation_angle = PPA_SRM_ROTATION_ANGLE_90;
+  operation.out.block_offset_x = y;
+  operation.out.block_offset_y = kLandscapeWidth - (x + outWidth);
+#else
+  operation.rotation_angle = PPA_SRM_ROTATION_ANGLE_270;
+  operation.out.block_offset_x = kLandscapeHeight - (y + outHeight);
+  operation.out.block_offset_y = x;
+#endif
+  operation.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+  operation.scale_x = float(kScaleNumerator) / kScaleDenominator;
+  operation.scale_y = operation.scale_x;
+  operation.alpha_update_mode = PPA_ALPHA_NO_CHANGE;
+  operation.mode = PPA_TRANS_MODE_BLOCKING;
+  const esp_err_t result = ppa_do_scale_rotate_mirror(scaler, &operation);
+  if (result != ESP_OK) {
+    Serial.printf("PPA flush failed: %s\n", esp_err_to_name(result));
+  }
+  lv_display_flush_ready(displayDriver);
+}
+
+// Map a portrait panel touch to the logical 800x480 layout.
+bool mapTouch(int32_t panelX, int32_t panelY, int32_t& x, int32_t& y) {
+#if BLUESQUID_P4_DISPLAY_ROTATION == 90
+  const int32_t landscapeX = kLandscapeWidth - 1 - panelY;
+  const int32_t landscapeY = panelX;
+#else
+  const int32_t landscapeX = panelY;
+  const int32_t landscapeY = kLandscapeHeight - 1 - panelX;
+#endif
+  x = (landscapeX - kOffsetX) * kScaleDenominator / kScaleNumerator;
+  y = (landscapeY - kOffsetY) * kScaleDenominator / kScaleNumerator;
+  if (x < 0 || y < 0 || x >= kLogicalWidth || y >= kLogicalHeight) {
+    return false;
+  }
+  return true;
+}
+
+bool beginScaledDisplay(LCD* lcd) {
+  panelFrame = lcd->getFrameBufferByIndex(0);
+  if (panelFrame == nullptr) {
+    Serial.println("LVGL init: MIPI-DSI frame buffer unavailable");
+    return false;
+  }
+  memset(panelFrame, 0, kPanelFrameBytes);
+  esp_cache_msync(panelFrame, kPanelFrameBytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+  ppa_client_config_t client{};
+  client.oper_type = PPA_OPERATION_SRM;
+  client.max_pending_trans_num = 1;
+  client.data_burst_length = PPA_DATA_BURST_LENGTH_128;
+  if (ppa_register_client(&client, &scaler) != ESP_OK) {
+    Serial.println("LVGL init: PPA scaler registration failed");
+    return false;
+  }
+  return true;
+}
+#endif
 
 // Opacity and transforms can require an ARGB layer larger than LVGL's
 // fixed widget pool (the 250x250 colour wheel alone is 250,000 bytes).
@@ -106,8 +236,15 @@ void readTouch(lv_indev_t* indev, lv_indev_data_t* data) {
       }
       suppressWakeGesture.store(false, std::memory_order_relaxed);
     }
+#if BLUESQUID_TOUCHSCREEN_10IN
+    int32_t x = 0, y = 0;
+    if (!mapTouch(point.x, point.y, x, y)) return;  // Outside the UI border.
+    data->point.x = x;
+    data->point.y = y;
+#else
     data->point.x = point.x;
     data->point.y = point.y;
+#endif
     data->state = LV_INDEV_STATE_PRESSED;
   } else {
     suppressWakeGesture.store(false, std::memory_order_relaxed);
@@ -189,6 +326,35 @@ bool lvgl_port_init(LCD* lcd, Touch* touch) {
     return false;
   }
 
+#if BLUESQUID_TOUCHSCREEN_10IN
+  if (!beginScaledDisplay(lcd)) return false;
+  // Direct mode keeps the whole logical frame, so the PPA can read any
+  // aligned area from it. Rendering is blocked until each scale completes.
+  const size_t frameBytes = size_t(kLogicalWidth) * kLogicalHeight * 2;
+  renderFrame = heap_caps_malloc(frameBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (renderFrame == nullptr) {
+    Serial.printf("LVGL init: %u-byte render frame unavailable\n",
+                  static_cast<unsigned>(frameBytes));
+    return false;
+  }
+  drawBuffers[0] = renderFrame;
+  Serial.printf("LVGL init: %ldx%ld UI scaled %ld/%ld onto %ldx%ld panel, rotation %d\n",
+                long(kLogicalWidth), long(kLogicalHeight), long(kScaleNumerator),
+                long(kScaleDenominator), long(kPanelWidth), long(kPanelHeight),
+                BLUESQUID_P4_DISPLAY_ROTATION);
+  display = lv_display_create(kLogicalWidth, kLogicalHeight);
+  if (display == nullptr) {
+    Serial.println("LVGL init: display creation failed");
+    return false;
+  }
+  lv_display_set_default(display);
+  lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+  lv_display_set_flush_cb(display, flushScaled);
+  lv_display_add_event_cb(display, alignInvalidArea, LV_EVENT_INVALIDATE_AREA,
+                          nullptr);
+  lv_display_set_buffers(display, renderFrame, nullptr, frameBytes,
+                         LV_DISPLAY_RENDER_MODE_DIRECT);
+#else
   const uint32_t width = lcd->getFrameWidth();
   const uint32_t height = lcd->getFrameHeight();
   if (width == 0 || height == 0) {
@@ -242,6 +408,7 @@ bool lvgl_port_init(LCD* lcd, Touch* touch) {
   lv_display_set_flush_cb(display, flushDisplay);
   lv_display_set_buffers(display, drawBuffers[0], drawBuffers[1], bufferBytes,
                          LV_DISPLAY_RENDER_MODE_PARTIAL);
+#endif
 
   if (touch != nullptr) {
     if (touch->isInterruptEnabled()) {
@@ -327,6 +494,13 @@ bool lvgl_port_deinit() {
     vSemaphoreDelete(lvglMutex);
     lvglMutex = nullptr;
   }
+#if BLUESQUID_TOUCHSCREEN_10IN
+  if (scaler != nullptr) {
+    ppa_unregister_client(scaler);
+    scaler = nullptr;
+  }
+  renderFrame = nullptr;  // Freed with drawBuffers above.
+#endif
   display = nullptr;
   pointerDevice = nullptr;
   return true;

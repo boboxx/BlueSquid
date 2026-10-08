@@ -22,7 +22,15 @@
  *
  * Set to `1` to enable custom board configuration, `0` to disable
  */
+// BlueSquid: enabled only for the Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1,
+// which ESP32_Display_Panel does not list. The 7-inch build uses the
+// supported-board configuration instead.
+#if defined(BLUESQUID_TOUCHSCREEN_10IN) && BLUESQUID_TOUCHSCREEN_10IN
+#define ESP_PANEL_BOARD_DEFAULT_USE_CUSTOM  (1)
+#include "esp_panel_jd9365_10in_init.h"
+#else
 #define ESP_PANEL_BOARD_DEFAULT_USE_CUSTOM  (0)
+#endif
 
 #if ESP_PANEL_BOARD_DEFAULT_USE_CUSTOM
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -31,13 +39,13 @@
 /**
  * @brief Board name (format: "Manufacturer:Model")
  */
-#define ESP_PANEL_BOARD_NAME                "Custom:Custom"
+#define ESP_PANEL_BOARD_NAME                "Waveshare:ESP32-P4-WIFI6-Touch-LCD-10.1"
 
 /**
  * @brief Panel resolution configuration in pixels
  */
-#define ESP_PANEL_BOARD_WIDTH               (320)   // Panel width (horizontal, in pixels)
-#define ESP_PANEL_BOARD_HEIGHT              (240)   // Panel height (vertical, in pixels)
+#define ESP_PANEL_BOARD_WIDTH               (800)   // Panel width (horizontal, in pixels)
+#define ESP_PANEL_BOARD_HEIGHT              (1280)   // Panel height (vertical, in pixels)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////// Please update the following macros to configure the LCD panel /////////////////////////////
@@ -47,7 +55,7 @@
  *
  * Set to `1` to enable LCD panel support, `0` to disable
  */
-#define ESP_PANEL_BOARD_USE_LCD             (0)
+#define ESP_PANEL_BOARD_USE_LCD             (1)
 
 #if ESP_PANEL_BOARD_USE_LCD
 /**
@@ -65,7 +73,7 @@
  * - `SPD2010`
  * - `ST7262`, `ST7701`, `ST7703`, `ST7789`, `ST7796`, `ST77903`, `ST77916`, `ST77922`
  */
-#define ESP_PANEL_BOARD_LCD_CONTROLLER      ILI9341
+#define ESP_PANEL_BOARD_LCD_CONTROLLER      JD9365
 
 /**
  * @brief LCD bus type selection
@@ -76,7 +84,7 @@
  * - `ESP_PANEL_BUS_TYPE_RGB` (ESP32-S3 only)
  * - `ESP_PANEL_BUS_TYPE_MIPI_DSI` (ESP32-P4 only)
  */
-#define ESP_PANEL_BOARD_LCD_BUS_TYPE        (ESP_PANEL_BUS_TYPE_SPI)
+#define ESP_PANEL_BOARD_LCD_BUS_TYPE        (ESP_PANEL_BUS_TYPE_MIPI_DSI)
 
 #if (ESP_PANEL_BOARD_LCD_BUS_TYPE == ESP_PANEL_BUS_TYPE_SPI) || \
     (ESP_PANEL_BOARD_LCD_BUS_TYPE == ESP_PANEL_BUS_TYPE_QSPI)
@@ -229,21 +237,21 @@
      */
     /* For host */
     #define ESP_PANEL_BOARD_LCD_MIPI_DSI_LANE_NUM           (2)     // ESP32-P4 supports 1 or 2 lanes
-    #define ESP_PANEL_BOARD_LCD_MIPI_DSI_LANE_RATE_MBPS     (1000)  // Single lane bit rate, should check the LCD drive IC
+    #define ESP_PANEL_BOARD_LCD_MIPI_DSI_LANE_RATE_MBPS     (1500)  // Single lane bit rate, should check the LCD drive IC
                                                                     // datasheet for the supported lane rate. Different
                                                                     // color format (RGB565/RGB888) may have different
                                                                     // lane bit rate requirements.
                                                                     // ESP32-P4 supports max 1500Mbps
     /* For refresh panel (DPI) */
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_CLK_MHZ            (52)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_CLK_MHZ            (80)
     #define ESP_PANEL_BOARD_LCD_MIPI_DPI_PIXEL_BITS         (ESP_PANEL_LCD_COLOR_BITS_RGB565)
                                                                     // ESP_PANEL_LCD_COLOR_BITS_RGB565/RGB666/RGB888
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_HPW                (10)
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_HBP                (160)
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_HFP                (160)
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_VPW                (1)
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_VBP                (23)
-    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_VFP                (12)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_HPW                (20)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_HBP                (20)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_HFP                (40)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_VPW                (4)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_VBP                (12)
+    #define ESP_PANEL_BOARD_LCD_MIPI_DPI_VFP                (30)
     /* For DSI power PHY */
     #define ESP_PANEL_BOARD_LCD_MIPI_PHY_LDO_ID             (3)     // -1 if not used.
 
@@ -289,6 +297,7 @@
  *    - ESP_PANEL_LCD_CMD_WITH_8BIT_PARAM(delay_ms, command, {data0, data1, ...})
  *    - ESP_PANEL_LCD_CMD_WITH_NONE_PARAM(delay_ms, command)
  */
+#define ESP_PANEL_BOARD_LCD_VENDOR_INIT_CMD() BLUESQUID_JD9365_10IN_INIT_CMD()
 /*
 #define ESP_PANEL_BOARD_LCD_VENDOR_INIT_CMD()                       \
     {                                                               \
@@ -324,7 +333,7 @@
 /**
  * @brief LCD reset pin configuration
  */
-#define ESP_PANEL_BOARD_LCD_RST_IO              (-1)    // Reset pin, -1 if not used
+#define ESP_PANEL_BOARD_LCD_RST_IO              (27)    // Reset pin, -1 if not used
 #define ESP_PANEL_BOARD_LCD_RST_LEVEL           (0)     // Reset active level, 0: low, 1: high
 
 #endif // ESP_PANEL_BOARD_USE_LCD
@@ -337,7 +346,7 @@
  *
  * Set to `1` to enable touch panel support, `0` to disable
  */
-#define ESP_PANEL_BOARD_USE_TOUCH               (0)
+#define ESP_PANEL_BOARD_USE_TOUCH               (1)
 
 #if ESP_PANEL_BOARD_USE_TOUCH
 /**
@@ -356,7 +365,7 @@
  * - `TT21100`
  * - `XPT2046`
  */
-#define ESP_PANEL_BOARD_TOUCH_CONTROLLER        TT21100
+#define ESP_PANEL_BOARD_TOUCH_CONTROLLER        GT911   // GT9271 is register-compatible
 
 /**
  * @brief Touch bus type selection
@@ -391,12 +400,12 @@
     #define ESP_PANEL_BOARD_TOUCH_I2C_HOST_ID           (0)     // Typically set to 0
 #if !ESP_PANEL_BOARD_TOUCH_BUS_SKIP_INIT_HOST
     /* For host */
-    #define ESP_PANEL_BOARD_TOUCH_I2C_CLK_HZ            (400 * 1000)
+    #define ESP_PANEL_BOARD_TOUCH_I2C_CLK_HZ            (100 * 1000)
                                                                 // Typically set to 400K
     #define ESP_PANEL_BOARD_TOUCH_I2C_SCL_PULLUP        (1)     // 0/1. Typically set to 1
     #define ESP_PANEL_BOARD_TOUCH_I2C_SDA_PULLUP        (1)     // 0/1. Typically set to 1
-    #define ESP_PANEL_BOARD_TOUCH_I2C_IO_SCL            (18)
-    #define ESP_PANEL_BOARD_TOUCH_I2C_IO_SDA            (8)
+    #define ESP_PANEL_BOARD_TOUCH_I2C_IO_SCL            (8)
+    #define ESP_PANEL_BOARD_TOUCH_I2C_IO_SDA            (7)
 #endif
     /* For panel */
     #define ESP_PANEL_BOARD_TOUCH_I2C_ADDRESS           (0)     // Typically set to 0 to use the default address.
@@ -453,7 +462,7 @@
  *
  * Set to `1` to enable backlight support, `0` to disable
  */
-#define ESP_PANEL_BOARD_USE_BACKLIGHT           (0)
+#define ESP_PANEL_BOARD_USE_BACKLIGHT           (1)
 
 #if ESP_PANEL_BOARD_USE_BACKLIGHT
 /**
@@ -474,7 +483,7 @@
     /**
      * @brief Backlight control pin configuration
      */
-    #define ESP_PANEL_BOARD_BACKLIGHT_IO        (38)    // Output GPIO pin number
+    #define ESP_PANEL_BOARD_BACKLIGHT_IO        (26)    // Output GPIO pin number
     #define ESP_PANEL_BOARD_BACKLIGHT_ON_LEVEL  (1)     // Active level, 0: low, 1: high
 
 #if ESP_PANEL_BOARD_BACKLIGHT_TYPE == ESP_PANEL_BACKLIGHT_TYPE_PWM_LEDC

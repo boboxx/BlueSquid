@@ -51,6 +51,10 @@ pio run -e touchscreen_controller
 | --- | --- |
 | Controller | `.pio/build/main_controller/BlueSquid-main_controller.bsfw` |
 | Touchscreen | `.pio/build/touchscreen_controller/BlueSquid-touchscreen_controller.bsfw` |
+| 10.1-inch touchscreen | `.pio/build/touchscreen_10in/BlueSquid-touchscreen_10in.bsfw` |
+
+Each package names its device, so a 7-inch package is rejected by the
+10.1-inch screen and the reverse.
 
 ## Connection and credentials
 

@@ -81,6 +81,8 @@ Hardware assignments and application constants are centralized in
 - `touchscreen_controller`: Waveshare 7-inch ESP32-S3 display, LVGL 9.5
   interface and persistent BLE client. BlueSquid supplies its own LVGL 9 display/touch port
   because ESP32_Display_Panel 1.0.4's bundled GUI adapter targets LVGL 8.
+- `touchscreen_10in`: Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1, built from the
+  same touchscreen sources. See [10.1-inch touchscreen](docs/touchscreen-10in.md).
 
 The optimized touchscreen BLE protocol is in `include/BlueSquidBleProtocol.h`.
 CAN connections and termination are documented in `docs/wiring.md`.

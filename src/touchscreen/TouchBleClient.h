@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <atomic>
-#include <NimBLEAddress.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
@@ -14,10 +13,8 @@
 #include "SnapshotRevisionGate.h"
 #include "OtaCredentials.h"
 #include "OtaLink.h"
+#include "TouchBleStack.h"
 
-class NimBLEAdvertisedDevice;
-class NimBLEClient;
-class NimBLERemoteCharacteristic;
 class TouchBleAdvertisedCallbacks;
 class TouchBleClientCallbacks;
 
@@ -58,13 +55,13 @@ class TouchBleClient {
   std::atomic_bool maintenanceBusy_{false};
   void synchronizeOtaCredentials();
   void updateControllerNetwork();
-  std::atomic<NimBLERemoteCharacteristic*> otaLinkCharacteristic_{nullptr};
+  std::atomic<TouchBleCharacteristic*> otaLinkCharacteristic_{nullptr};
   std::atomic<uint8_t> otaLinkAction_{0};
   bool otaLinkWanted_ = false;
   uint32_t otaLinkId_ = 0, otaLinkPollMs_ = 0, otaLinkWriteMs_ = 0;
   OtaLink::View otaLinkView_;
   mutable portMUX_TYPE otaLinkMux_ = portMUX_INITIALIZER_UNLOCKED;
-  std::atomic<NimBLERemoteCharacteristic*> otaCredentialsCharacteristic_{nullptr};
+  std::atomic<TouchBleCharacteristic*> otaCredentialsCharacteristic_{nullptr};
   std::atomic<uint32_t> otaConnectionRevision_{0};
   uint32_t otaObservedRevision_ = 0;
   uint32_t otaLastPollMs_ = 0, otaLastWriteMs_ = 0;
@@ -72,7 +69,7 @@ class TouchBleClient {
   friend class TouchBleAdvertisedCallbacks;
   friend class TouchBleClientCallbacks;
 
-  void foundRear(NimBLEAdvertisedDevice* device);
+  void foundRear(const TouchBleAddress& address);
   bool connectToRear();
   static void connectionTaskEntry(void* context);
   void disconnected();
@@ -86,16 +83,16 @@ class TouchBleClient {
   bool sendRgbwState(uint8_t zone);
   void prepareRgbwState(uint8_t zone);
 
-  static void snapshotNotification(NimBLERemoteCharacteristic*, uint8_t* data,
+  static void snapshotNotification(TouchBleCharacteristic*, uint8_t* data,
                                    size_t length, bool);
-  static void ackNotification(NimBLERemoteCharacteristic*, uint8_t* data,
+  static void ackNotification(TouchBleCharacteristic*, uint8_t* data,
                               size_t length, bool);
-  static void discoveryNotification(NimBLERemoteCharacteristic*, uint8_t* data,
+  static void discoveryNotification(TouchBleCharacteristic*, uint8_t* data,
                                     size_t length, bool);
 
   TouchRemoteStatus status_{};
-  NimBLEAddress rearAddress_;
-  NimBLEAddress lastConnectedAddress_;
+  TouchBleAddress rearAddress_;
+  TouchBleAddress lastConnectedAddress_;
   std::atomic_bool lastConnectedAddressValid_{false};
   std::atomic_bool rearAddressValid_{false};
   portMUX_TYPE scanMutex_ = portMUX_INITIALIZER_UNLOCKED;
@@ -104,12 +101,12 @@ class TouchBleClient {
     char command[320];
   };
   QueueHandle_t configurationQueue_ = nullptr;
-  NimBLEClient* client_ = nullptr;
-  NimBLERemoteCharacteristic* snapshotCharacteristic_ = nullptr;
-  NimBLERemoteCharacteristic* commandCharacteristic_ = nullptr;
-  NimBLERemoteCharacteristic* ackCharacteristic_ = nullptr;
-  NimBLERemoteCharacteristic* configCharacteristic_ = nullptr;
-  NimBLERemoteCharacteristic* discoveryCharacteristic_ = nullptr;
+  TouchBleClientHandle* client_ = nullptr;
+  TouchBleCharacteristic* snapshotCharacteristic_ = nullptr;
+  TouchBleCharacteristic* commandCharacteristic_ = nullptr;
+  TouchBleCharacteristic* ackCharacteristic_ = nullptr;
+  TouchBleCharacteristic* configCharacteristic_ = nullptr;
+  TouchBleCharacteristic* discoveryCharacteristic_ = nullptr;
   // Written by the NimBLE task, read by the UI: copied under a lock rather
   // than as a heap String, so a notification cannot reallocate it mid-read.
   char sp630ePayload_[256]{};

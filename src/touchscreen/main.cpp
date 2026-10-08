@@ -17,8 +17,12 @@
 #include <lvgl.h>
 #include <FS.h>
 #include <Preferences.h>
+#if BLUESQUID_TOUCHSCREEN_10IN
+#include <SD_MMC.h>
+#else
 #include <SD.h>
 #include <SPI.h>
+#endif
 
 #include <cmath>
 #include <vector>
@@ -28,13 +32,17 @@
 #include "SystemTypes.h"
 
 #include "TouchBleClient.h"
+#include "TouchBoard.h"
 #include "lvgl_port.h"
 
-#if !ESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED
-#error "The touchscreen target requires a supported ESP Panel board configuration"
+#if BLUESQUID_TOUCHSCREEN_10IN
+// esp_panel_board_custom_conf.h describes this board; a supported-board
+// selection would replace it.
+#if ESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED
+#error "The 10.1-inch touchscreen requires the custom ESP Panel board configuration"
 #endif
-
-#if !defined(BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7)
+#elif !ESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED || \
+    !defined(BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7)
 #error "This touchscreen firmware is configured only for Waveshare ESP32-S3-Touch-LCD-7"
 #endif
 
@@ -65,10 +73,24 @@ constexpr uint32_t kColorAmber = 0xFFBE55;
 constexpr uint32_t kColorLightbulb = 0xFFD600;
 constexpr uint32_t kColorRed = 0xFF6B70;
 constexpr uint32_t kCommandSettleTimeoutMs = 8000;
+#if BLUESQUID_TOUCHSCREEN_10IN
+constexpr char kDisplayTarget[] = "Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1";
+// MicroSD socket on SDMMC slot 0. Slot 1 carries the ESP32-C6 radio.
+constexpr int kSdClockPin = 43;
+constexpr int kSdCommandPin = 44;
+constexpr int kSdData0Pin = 39;
+constexpr int kSdData1Pin = 40;
+constexpr int kSdData2Pin = 41;
+constexpr int kSdData3Pin = 42;
+fs::SDMMCFS& sdCard = SD_MMC;
+#else
+constexpr char kDisplayTarget[] = "Waveshare ESP32-S3-Touch-LCD-7";
 constexpr int kSdMosiPin = 11;
 constexpr int kSdClockPin = 12;
 constexpr int kSdMisoPin = 13;
 constexpr int kSdChipSelectExpanderPin = 4;
+fs::SDFS& sdCard = SD;
+#endif
 constexpr char kExportDirectory[] = "/bluesquid";
 constexpr char kExportPath[] = "/bluesquid/config-latest.json";
 constexpr char kExportTempPath[] = "/bluesquid/config.tmp";
@@ -2509,8 +2531,41 @@ void setExportStatus(const char* message, uint32_t color) {
                               lv_color_hex(color), 0);
 }
 
+#if BLUESQUID_TOUCHSCREEN_10IN
 bool mountSdCard() {
-  if (sdMounted && SD.cardType() != CARD_NONE) return true;
+  if (sdMounted && sdCard.cardType() != CARD_NONE) return true;
+  sdMounted = false;
+  sdMountError = "SD card is not initialized.";
+  sdCard.end();
+  if (!sdCard.setPins(kSdClockPin, kSdCommandPin, kSdData0Pin, kSdData1Pin,
+                      kSdData2Pin, kSdData3Pin)) {
+    sdMountError = "SD pins could not be configured.";
+    Serial.println("SD mount failed: SDMMC pin configuration rejected");
+    return false;
+  }
+  // One-bit mode, as validated by Waveshare's example for this board.
+  Serial.printf("SD: begin SDMMC CLK=%d CMD=%d D0=%d\n", kSdClockPin,
+                kSdCommandPin, kSdData0Pin);
+  if (!sdCard.begin("/sdcard", true)) {
+    sdMountError = "SD communication failed. See the serial diagnostic.";
+    Serial.println("SD mount failed: SDMMC begin failed");
+    return false;
+  }
+  if (sdCard.cardType() == CARD_NONE) {
+    sdCard.end();
+    sdMountError = "No SD card was detected in the socket.";
+    Serial.println("SD mount failed: card type is CARD_NONE");
+    return false;
+  }
+  sdMounted = true;
+  sdMountError = "";
+  Serial.printf("SD card mounted: %llu MB\n",
+                sdCard.cardSize() / (1024ULL * 1024ULL));
+  return true;
+}
+#else
+bool mountSdCard() {
+  if (sdMounted && sdCard.cardType() != CARD_NONE) return true;
   sdMounted = false;
   sdMountError = "SD card is not initialized.";
   if (panel == nullptr || panel->getIO_Expander() == nullptr) {
@@ -2531,7 +2586,7 @@ bool mountSdCard() {
   // component initialized it first, then supply the SD-required idle clocks
   // while the real (expander) CS is high. The Arduino SD driver cannot toggle
   // an expander pin and Waveshare's basic example simply holds this CS low.
-  SD.end();
+  sdCard.end();
   SPI.end();
   if (!expander->digitalWrite(kSdChipSelectExpanderPin, HIGH)) {
     sdMountError = "Unable to control the SD card-select pin.";
@@ -2552,9 +2607,9 @@ bool mountSdCard() {
   Serial.printf("SD: begin CLK=%d MISO=%d MOSI=%d CS=EXIO%d\n",
                 kSdClockPin, kSdMisoPin, kSdMosiPin,
                 kSdChipSelectExpanderPin);
-  if (!SD.begin(-1, SPI, 4000000)) {
+  if (!sdCard.begin(-1, SPI, 4000000)) {
     Serial.println("SD: 4 MHz mount failed; retrying at 1 MHz");
-    SD.end();
+    sdCard.end();
     expander->digitalWrite(kSdChipSelectExpanderPin, HIGH);
     delay(10);
     SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
@@ -2562,14 +2617,14 @@ bool mountSdCard() {
     SPI.endTransaction();
     expander->digitalWrite(kSdChipSelectExpanderPin, LOW);
     delay(100);
-    if (!SD.begin(-1, SPI, 1000000)) {
+    if (!sdCard.begin(-1, SPI, 1000000)) {
       sdMountError = "SD communication failed. See the serial diagnostic.";
       Serial.println("SD mount failed: both 4 MHz and 1 MHz attempts failed");
       return false;
     }
   }
-  if (SD.cardType() == CARD_NONE) {
-    SD.end();
+  if (sdCard.cardType() == CARD_NONE) {
+    sdCard.end();
     sdMountError = "No SD card was detected in the socket.";
     Serial.println("SD mount failed: card type is CARD_NONE");
     return false;
@@ -2577,9 +2632,10 @@ bool mountSdCard() {
   sdMounted = true;
   sdMountError = "";
   Serial.printf("SD card mounted: %llu MB\n",
-                SD.cardSize() / (1024ULL * 1024ULL));
+                sdCard.cardSize() / (1024ULL * 1024ULL));
   return true;
 }
+#endif
 
 void writeJsonString(File& file, const char* value) {
   file.print('"');
@@ -2597,11 +2653,11 @@ void writeJsonString(File& file, const char* value) {
 }
 
 bool writeConfigurationExport(const TouchRemoteStatus& status) {
-  if (!SD.exists(kExportDirectory) && !SD.mkdir(kExportDirectory)) {
+  if (!sdCard.exists(kExportDirectory) && !sdCard.mkdir(kExportDirectory)) {
     return false;
   }
-  if (SD.exists(kExportTempPath)) SD.remove(kExportTempPath);
-  File file = SD.open(kExportTempPath, FILE_WRITE);
+  if (sdCard.exists(kExportTempPath)) sdCard.remove(kExportTempPath);
+  File file = sdCard.open(kExportTempPath, FILE_WRITE);
   if (!file) return false;
 
 
@@ -2654,21 +2710,21 @@ bool writeConfigurationExport(const TouchRemoteStatus& status) {
   const bool writeSucceeded = file.getWriteError() == 0;
   file.close();
   if (!writeSucceeded) {
-    SD.remove(kExportTempPath);
+    sdCard.remove(kExportTempPath);
     return false;
   }
 
-  if (SD.exists(kExportBackupPath)) SD.remove(kExportBackupPath);
-  const bool hadPrevious = SD.exists(kExportPath);
-  if (hadPrevious && !SD.rename(kExportPath, kExportBackupPath)) {
-    SD.remove(kExportTempPath);
+  if (sdCard.exists(kExportBackupPath)) sdCard.remove(kExportBackupPath);
+  const bool hadPrevious = sdCard.exists(kExportPath);
+  if (hadPrevious && !sdCard.rename(kExportPath, kExportBackupPath)) {
+    sdCard.remove(kExportTempPath);
     return false;
   }
-  if (!SD.rename(kExportTempPath, kExportPath)) {
-    if (hadPrevious) SD.rename(kExportBackupPath, kExportPath);
+  if (!sdCard.rename(kExportTempPath, kExportPath)) {
+    if (hadPrevious) sdCard.rename(kExportBackupPath, kExportPath);
     return false;
   }
-  if (hadPrevious) SD.remove(kExportBackupPath);
+  if (hadPrevious) sdCard.remove(kExportBackupPath);
   return true;
 }
 
@@ -2821,7 +2877,7 @@ void importConfigurationClicked(lv_event_t* event) {
     setExportStatus(sdMountError, kColorRed);
     return;
   }
-  File file = SD.open(kExportPath, FILE_READ);
+  File file = sdCard.open(kExportPath, FILE_READ);
   if (!file) {
     setExportStatus("No /bluesquid/config-latest.json file found.", kColorRed);
     return;
@@ -4380,7 +4436,7 @@ void setup() {
   delay(250);
   Serial.printf("BlueSquid touchscreen %s starting; reset reason=%d\n",
                 AppConfig::kFirmwareVersion, static_cast<int>(esp_reset_reason()));
-  Serial.println("Display target: Waveshare ESP32-S3-Touch-LCD-7");
+  Serial.printf("Display target: %s\n", kDisplayTarget);
 
   uiPreferencesReady = uiPreferences.begin("bluesquid-ui", false);
   if (uiPreferencesReady) {
@@ -4403,7 +4459,7 @@ void setup() {
   loadDeviceLabels();
 
 
-  panel = new Board();
+  panel = createTouchBoard();
   if (!panel->init()) {
     Serial.println("Display configuration initialization failed");
     return;

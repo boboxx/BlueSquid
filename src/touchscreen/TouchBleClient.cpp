@@ -1,8 +1,30 @@
 #include "TouchBleClient.h"
 #include "TouchHotspot.h"
 
+#if BLUESQUID_TOUCH_CORE_BLE
+#include <BLEDevice.h>
+#include <BLESecurity.h>
+#include <BLEUtils.h>
+using TouchBleDevice = BLEDevice;
+using TouchBleUtils = BLEUtils;
+using TouchBleUuid = BLEUUID;
+using TouchBleScan = BLEScan;
+using TouchBleService = BLERemoteService;
+using TouchBleAdvertisedDevice = BLEAdvertisedDevice;
+using TouchBleAdvertisedDeviceCallbacks = BLEAdvertisedDeviceCallbacks;
+using TouchBleClientCallbacksBase = BLEClientCallbacks;
+#else
 #include <NimBLEDevice.h>
 #include <NimBLEUtils.h>
+using TouchBleDevice = NimBLEDevice;
+using TouchBleUtils = NimBLEUtils;
+using TouchBleUuid = NimBLEUUID;
+using TouchBleScan = NimBLEScan;
+using TouchBleService = NimBLERemoteService;
+using TouchBleAdvertisedDevice = NimBLEAdvertisedDevice;
+using TouchBleAdvertisedDeviceCallbacks = NimBLEAdvertisedDeviceCallbacks;
+using TouchBleClientCallbacksBase = NimBLEClientCallbacks;
+#endif
 
 #include "BlueSquidBleProtocol.h"
 #include "AppConfig.h"
@@ -12,73 +34,119 @@ TouchBleClient* activeClient = nullptr;
 constexpr char kTouchDeviceName[] = "BlueSquid-Touch";
 // Survives a software reset; rearmed only after a minute of healthy operation.
 RTC_DATA_ATTR bool discoveryRestartUsed = false;
+
+// NimBLE-Arduino takes const data; the core library's signature does not,
+// although it only reads the buffer.
+bool writeBytes(TouchBleCharacteristic* characteristic, const uint8_t* data,
+                size_t length, bool response) {
+  return characteristic->writeValue(const_cast<uint8_t*>(data), length,
+                                    response);
+}
+
+// Drop a link that completed pairing without encryption.
+void requireEncryption(const ble_gap_conn_desc* description) {
+  if (description->sec_state.encrypted) return;
+  TouchBleClientHandle* client =
+      TouchBleDevice::getClientByID(description->conn_handle);
+  if (client != nullptr) client->disconnect();
+}
 }
 
 class TouchBleAdvertisedCallbacks final
-    : public NimBLEAdvertisedDeviceCallbacks {
+    : public TouchBleAdvertisedDeviceCallbacks {
  public:
   explicit TouchBleAdvertisedCallbacks(TouchBleClient& owner)
       : owner_(owner) {}
 
+#if BLUESQUID_TOUCH_CORE_BLE
+  void onResult(BLEAdvertisedDevice device) override { inspect(device); }
+#else
   void onResult(NimBLEAdvertisedDevice* device) override {
-    const bool serviceMatch = device->isAdvertisingService(
-        NimBLEUUID(BlueSquidBle::kServiceUuid)) ||
-        device->isAdvertisingService(NimBLEUUID(AppConfig::Ble::kServiceUuid));
-    const bool nameMatch = device->haveName() &&
-        device->getName() == AppConfig::kBleDeviceName;
+    if (device != nullptr) inspect(*device);
+  }
+#endif
+
+ private:
+  void inspect(TouchBleAdvertisedDevice& device) {
+    const bool serviceMatch = device.isAdvertisingService(
+        TouchBleUuid(BlueSquidBle::kServiceUuid)) ||
+        device.isAdvertisingService(TouchBleUuid(AppConfig::Ble::kServiceUuid));
+    const bool nameMatch = device.haveName() &&
+        device.getName() == AppConfig::kBleDeviceName;
     if (serviceMatch || nameMatch) {
-      owner_.foundRear(device);
+      owner_.foundRear(device.getAddress());
     }
   }
 
- private:
   TouchBleClient& owner_;
 };
 
-class TouchBleClientCallbacks final : public NimBLEClientCallbacks {
+class TouchBleClientCallbacks final : public TouchBleClientCallbacksBase {
  public:
   explicit TouchBleClientCallbacks(TouchBleClient& owner) : owner_(owner) {}
 
-  void onDisconnect(NimBLEClient*) override { owner_.disconnected(); }
+  void onDisconnect(TouchBleClientHandle*) override { owner_.disconnected(); }
 
-  bool onConnParamsUpdateRequest(NimBLEClient*,
+  bool onConnParamsUpdateRequest(TouchBleClientHandle*,
                                  const ble_gap_upd_params*) override {
     return true;
   }
 
+#if !BLUESQUID_TOUCH_CORE_BLE
   void onAuthenticationComplete(ble_gap_conn_desc* description) override {
-    if (!description->sec_state.encrypted) {
-      NimBLEClient* client =
-          NimBLEDevice::getClientByID(description->conn_handle);
-      if (client != nullptr) client->disconnect();
-    }
+    requireEncryption(description);
   }
+#endif
 
  private:
   TouchBleClient& owner_;
 };
+
+#if BLUESQUID_TOUCH_CORE_BLE
+// The core library reports pairing through security callbacks instead.
+class TouchBleSecurityCallbacks final : public BLESecurityCallbacks {
+ public:
+  void onAuthenticationComplete(ble_gap_conn_desc* description) override {
+    requireEncryption(description);
+  }
+};
+#endif
 
 bool TouchBleClient::begin() {
   activeClient = this;
   // The Controller sends acknowledgements to every connected touchscreen.
   // Random starting points keep two touchscreens from sharing sequences.
   commandSequence_ = static_cast<uint16_t>(esp_random() | 1U);
+#if BLUESQUID_TOUCH_CORE_BLE
+  // On the P4 this also starts ESP-Hosted, which can fail if the C6 is absent.
+  if (!BLEDevice::init(kTouchDeviceName)) {
+    Serial.println("BLE init failed: ESP32-C6 radio unavailable");
+    return false;
+  }
+#else
   NimBLEDevice::init(kTouchDeviceName);
+#endif
   // Observe the actual GAP reason; getLastError() is not the disconnect reason.
-  NimBLEDevice::setCustomGapHandler([](ble_gap_event* event, void*) -> int {
+  TouchBleDevice::setCustomGapHandler([](ble_gap_event* event, void*) -> int {
     if (event->type == BLE_GAP_EVENT_DISCONNECT) {
       const auto& lost = event->disconnect;
       Serial.printf("BLE Controller link lost: reason=%d (%s), interval=%.2f ms latency=%u timeout=%u ms\n",
-          lost.reason, NimBLEUtils::returnCodeToString(lost.reason),
+          lost.reason, TouchBleUtils::returnCodeToString(lost.reason),
           lost.conn.conn_itvl * 1.25, lost.conn.conn_latency,
           lost.conn.supervision_timeout * 10U);
     }
     return 0;
   });
-  NimBLEDevice::setMTU(185);
+  TouchBleDevice::setMTU(185);
+#if BLUESQUID_TOUCH_CORE_BLE
+  BLESecurity::setCapability(BLE_HS_IO_NO_INPUT_OUTPUT);
+  BLESecurity::setAuthenticationMode(true, false, true);
+  TouchBleDevice::setSecurityCallbacks(new TouchBleSecurityCallbacks());
+#else
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   NimBLEDevice::setSecurityAuth(true, false, true);
-  NimBLEScan* scan = NimBLEDevice::getScan();
+#endif
+  TouchBleScan* scan = TouchBleDevice::getScan();
   scan->setAdvertisedDeviceCallbacks(
       new TouchBleAdvertisedCallbacks(*this), false);
   scan->setActiveScan(true);
@@ -108,7 +176,7 @@ bool TouchBleClient::begin() {
 void TouchBleClient::startScan() {
   if (!initialized_ || connected() || connectionInProgress_.load()) return;
   if (millis() - lastScanAttemptMs_ < BlueSquidBle::kReconnectDelayMs) return;
-  NimBLEScan* scan = NimBLEDevice::getScan();
+  TouchBleScan* scan = TouchBleDevice::getScan();
   if (!scan->isScanning()) {
     portENTER_CRITICAL(&scanMutex_);
     if (connectRequested_ || connectionInProgress_.load()) {
@@ -123,18 +191,17 @@ void TouchBleClient::startScan() {
   }
 }
 
-void TouchBleClient::foundRear(NimBLEAdvertisedDevice* device) {
-  if (device == nullptr) return;
+void TouchBleClient::foundRear(const TouchBleAddress& address) {
   portENTER_CRITICAL(&scanMutex_);
   if (connectRequested_ || connectionInProgress_.load()) {
     portEXIT_CRITICAL(&scanMutex_);
     return;
   }
-  rearAddress_ = device->getAddress();
+  rearAddress_ = address;
   rearAddressValid_ = true;
   connectRequested_ = true;
   portEXIT_CRITICAL(&scanMutex_);
-  NimBLEDevice::getScan()->stop();
+  TouchBleDevice::getScan()->stop();
   Serial.println("BLE controller advertisement found");
 }
 
@@ -142,21 +209,24 @@ void TouchBleClient::restartQuietly() {
   // Restarting during an active scan intermittently panicked inside the
   // restart itself. Stop radio activity without waiting on GATT work, which
   // may be the reason for this restart.
-  NimBLEDevice::getScan()->stop();
+  TouchBleDevice::getScan()->stop();
   delay(100);
   ESP.restart();
 }
 
 void TouchBleClient::updateConnection() {
+#if !BLUESQUID_TOUCH_CORE_BLE
+  // The core library's prebuilt NimBLE host has host flow control disabled.
   static_assert(MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL) == 20,
                 "Touchscreen BLE requires prompt receive-credit returns");
+#endif
   if (!initialized_) return;
   const uint32_t now = millis();
   const bool connecting = connectionInProgress_.load();
   if (now - lastHealthLogMs_ >= 30000) {
     lastHealthLogMs_ = now;
     Serial.printf("BLE health: online=%u link=%u scanning=%u reconnect=%u stage=%s snapshots=%lu age=%lu heap=%lu minHeap=%lu\n",
-        connected(), client_ && client_->isConnected(), NimBLEDevice::getScan()->isScanning(),
+        connected(), client_ && client_->isConnected(), TouchBleDevice::getScan()->isScanning(),
         connecting, connectionStage_.load(), static_cast<unsigned long>(receivedSnapshotCount_),
         static_cast<unsigned long>(status_.lastHeartbeatMs ? now - status_.lastHeartbeatMs : 0),
         static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getMinFreeHeap()));
@@ -195,16 +265,19 @@ void TouchBleClient::updateConnection() {
     rearAddress_ = lastConnectedAddress_;
     rearAddressValid_ = true;
     portEXIT_CRITICAL(&scanMutex_);
-    NimBLEScan* scan = NimBLEDevice::getScan();
+    TouchBleScan* scan = TouchBleDevice::getScan();
     if (!scan->stop()) {
       Serial.println("BLE discovery recovery: scan stop failed; will retry");
       connectionInProgress_.store(false);
       return;
     }
     scan->clearResults();
+#if !BLUESQUID_TOUCH_CORE_BLE
+    // The core library declares but does not implement this for NimBLE.
     scan->clearDuplicateCache();
     while (NimBLEDevice::isIgnored(lastConnectedAddress_))
       NimBLEDevice::removeIgnored(lastConnectedAddress_);
+#endif
     lastConnectAttemptMs_ = now;
     connectionStage_.store("retrying known address");
     reconnectWatchdog_.start(now, connectionProgress_.load());
@@ -274,12 +347,12 @@ void TouchBleClient::maintainConnection() {
   ConfigurationRequest request{};
   if (configurationQueue_ &&
       xQueueReceive(configurationQueue_, &request, 0) == pdTRUE) {
-    NimBLERemoteCharacteristic* characteristic = request.config
+    TouchBleCharacteristic* characteristic = request.config
         ? configCharacteristic_ : discoveryCharacteristic_;
     if (!connected() || !characteristic) {
       Serial.println("BLE configuration request dropped: controller offline");
     } else {
-      const bool sent = characteristic->writeValue(
+      const bool sent = writeBytes(characteristic,
           reinterpret_cast<const uint8_t*>(request.command),
           strlen(request.command), true);
       Serial.printf("BLE configuration write: %s\n", sent ? "acknowledged" : "failed");
@@ -325,22 +398,41 @@ void TouchBleClient::setConnectionStage(const char* stage) {
 bool TouchBleClient::connectToRear() {
   portENTER_CRITICAL(&scanMutex_);
   const bool valid = rearAddressValid_;
-  const NimBLEAddress address = rearAddress_;
+  const TouchBleAddress address = rearAddress_;
   portEXIT_CRITICAL(&scanMutex_);
   if (!valid) return false;
   // Own one client/callback pair for the lifetime of the touchscreen. NimBLE
   // setClientCallbacks replaces the pointer without deleting the previous one.
   if (client_ == nullptr) {
-    client_ = NimBLEDevice::createClient();
+    client_ = TouchBleDevice::createClient();
     if (client_ == nullptr) return false;
+#if BLUESQUID_TOUCH_CORE_BLE
+    client_->setClientCallbacks(new TouchBleClientCallbacks(*this));
+#else
     client_->setClientCallbacks(new TouchBleClientCallbacks(*this), true);
+#endif
   }
+  setConnectionStage("connecting");
+  Serial.println("BLE controller stage: connecting");
+#if BLUESQUID_TOUCH_CORE_BLE
+  // The core client cannot preset connection parameters; request the same
+  // interval as soon as the link is up.
+  if (!client_->connect(address, 0xFF, 4000)) {
+    Serial.println("BLE controller connect failed");
+    return false;
+  }
+  client_->updateConnParams(32, 32, 0, 300);
+  setConnectionStage("securing");
+  Serial.println("BLE controller stage: securing");
+  if (!client_->secureConnection()) {
+    Serial.println("BLE controller security failed");
+    return false;
+  }
+#else
   // Match the SP630E links on the Controller's shared radio. Keep this
   // interval while awake, asleep and discovering services.
   client_->setConnectionParams(32, 32, 0, 300);
   client_->setConnectTimeout(4);
-  setConnectionStage("connecting");
-  Serial.println("BLE controller stage: connecting");
   if (!client_->connect(address, true)) {
     Serial.printf("BLE controller connect failed: %d\n", client_->getLastError());
     return false;
@@ -351,22 +443,23 @@ bool TouchBleClient::connectToRear() {
     Serial.printf("BLE controller security failed: %d\n", client_->getLastError());
     return false;
   }
+#endif
   setConnectionStage("discovering services");
   Serial.println("BLE controller stage: discovering services");
 
-  NimBLERemoteService* service =
+  TouchBleService* service =
       client_->getService(BlueSquidBle::kServiceUuid);
   if (service == nullptr) return false;
   setConnectionStage("discovering snapshot");
-  NimBLERemoteCharacteristic* snapshot =
+  TouchBleCharacteristic* snapshot =
       service->getCharacteristic(BlueSquidBle::kSnapshotUuid);
   if (snapshot == nullptr) return false;
   setConnectionStage("discovering command");
-  NimBLERemoteCharacteristic* command =
+  TouchBleCharacteristic* command =
       service->getCharacteristic(BlueSquidBle::kCommandUuid);
   if (command == nullptr) return false;
   setConnectionStage("discovering acknowledgement");
-  NimBLERemoteCharacteristic* ack = service->getCharacteristic(BlueSquidBle::kAckUuid);
+  TouchBleCharacteristic* ack = service->getCharacteristic(BlueSquidBle::kAckUuid);
   if (ack == nullptr) return false;
   setConnectionStage("subscribing");
   Serial.println("BLE controller stage: subscribing");
@@ -374,12 +467,12 @@ bool TouchBleClient::connectToRear() {
   setConnectionStage("subscribing acknowledgement");
   if (!ack->subscribe(true, ackNotification)) return false;
   setConnectionStage("discovering configuration service");
-  NimBLERemoteService* legacyService =
+  TouchBleService* legacyService =
       client_->getService(AppConfig::Ble::kServiceUuid);
-  NimBLERemoteCharacteristic* config = nullptr;
-  NimBLERemoteCharacteristic* discovery = nullptr;
-  NimBLERemoteCharacteristic* otaCredentials = nullptr;
-  NimBLERemoteCharacteristic* otaLink = nullptr;
+  TouchBleCharacteristic* config = nullptr;
+  TouchBleCharacteristic* discovery = nullptr;
+  TouchBleCharacteristic* otaCredentials = nullptr;
+  TouchBleCharacteristic* otaLink = nullptr;
   if (legacyService != nullptr) {
     setConnectionStage("discovering configuration");
     config =
@@ -398,10 +491,10 @@ bool TouchBleClient::connectToRear() {
   }
   setConnectionStage("reading initial status");
   Serial.println("BLE controller stage: reading initial status");
-  const std::string initialStatus = snapshot->readValue();
+  const auto initialStatus = snapshot->readValue();
   if (!client_->isConnected()) return false;
-  processSnapshot(reinterpret_cast<const uint8_t*>(initialStatus.data()),
-                  initialStatus.size());
+  processSnapshot(reinterpret_cast<const uint8_t*>(initialStatus.c_str()),
+                  initialStatus.length());
   if (!client_->isConnected() || status_.lastHeartbeatMs == 0) return false;
   snapshotCharacteristic_ = snapshot;
   commandCharacteristic_ = command;
@@ -462,9 +555,9 @@ void TouchBleClient::synchronizeOtaCredentials() {
     otaCredentialsSync_.begin(desired, esp_random() | 1U);
     otaLastWriteMs_ = now - 3000;
   } else {
-    const std::string ack = characteristic->readValue();
-    if (ack.size() == 4 && otaCredentialsSync_.acknowledge(OtaCredentials::readId(
-        reinterpret_cast<const uint8_t*>(ack.data())))) {
+    const auto ack = characteristic->readValue();
+    if (ack.length() == 4 && otaCredentialsSync_.acknowledge(OtaCredentials::readId(
+        reinterpret_cast<const uint8_t*>(ack.c_str())))) {
       Serial.println("Controller OTA login synchronized with System hotspot");
       return;
     }
@@ -474,7 +567,7 @@ void TouchBleClient::synchronizeOtaCredentials() {
   uint8_t bytes[OtaCredentials::kWireSize]{};
   OtaCredentials::encode(bytes, otaCredentialsSync_.requested, otaCredentialsSync_.id);
   otaLastWriteMs_ = now;
-  characteristic->writeValue(bytes, sizeof(bytes), true);
+  writeBytes(characteristic, bytes, sizeof(bytes), true);
 }
 
 bool TouchBleClient::requestControllerUpdate(bool start) {
@@ -517,7 +610,7 @@ void TouchBleClient::updateControllerNetwork() {
   if (view.connected && characteristic) {
     const auto bytes = characteristic->readValue();
     OtaLink::Status status;
-    const bool received = OtaLink::decode(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), status);
+    const bool received = OtaLink::decode(reinterpret_cast<const uint8_t*>(bytes.c_str()), bytes.length(), status);
     if (received) view.status = status;
     const bool loginSynced = otaCredentialsSync_.current(TouchHotspot::credentials());
     bool send = false;
@@ -537,7 +630,7 @@ void TouchBleClient::updateControllerNetwork() {
       request[0] = otaLinkWanted_ ? 1 : 0;
       OtaCredentials::writeId(request + 1, otaLinkId_);
       otaLinkWriteMs_ = now;
-      characteristic->writeValue(request, sizeof(request), true);
+      writeBytes(characteristic, request, sizeof(request), true);
     }
   }
   view.connected = connected();
@@ -598,7 +691,7 @@ bool TouchBleClient::configureCerboWifi(const String& ssid,
   return queueConfiguration(command, true);
 }
 
-void TouchBleClient::discoveryNotification(NimBLERemoteCharacteristic*,
+void TouchBleClient::discoveryNotification(TouchBleCharacteristic*,
                                             uint8_t* data, size_t length,
                                             bool) {
   if (activeClient == nullptr || data == nullptr) return;
@@ -663,7 +756,7 @@ bool TouchBleClient::sendValueCommand(BlueSquidControl::Command command,
   uint8_t packet[BlueSquidBle::kCommandHeaderSize + 2]{};
   const size_t length = BlueSquidBle::encodeValueCommand(
       commandSequence_++, command, target, value, packet);
-  return commandCharacteristic_->writeValue(packet, length, false);
+  return writeBytes(commandCharacteristic_, packet, length, false);
 }
 
 void TouchBleClient::prepareRgbwState(uint8_t zone) {
@@ -694,7 +787,7 @@ bool TouchBleClient::sendRgbwState(uint8_t zone) {
   rgbwAckStartedMs_[zone] = millis();
   rgbwAwaitingAck_[zone] = true;
   rgbwSequence_[zone] = sequence;
-  if (!commandCharacteristic_->writeValue(packet, sizeof(packet), false)) {
+  if (!writeBytes(commandCharacteristic_, packet, sizeof(packet), false)) {
     rgbwAwaitingAck_[zone] = false;
     return false;
   }
@@ -709,13 +802,13 @@ bool TouchBleClient::connected() const {
          millis() - status_.lastHeartbeatMs <= BlueSquidBle::kOnlineTimeoutMs;
 }
 
-void TouchBleClient::snapshotNotification(NimBLERemoteCharacteristic*,
+void TouchBleClient::snapshotNotification(TouchBleCharacteristic*,
                                           uint8_t* data, size_t length,
                                           bool) {
   if (activeClient != nullptr) activeClient->processSnapshot(data, length);
 }
 
-void TouchBleClient::ackNotification(NimBLERemoteCharacteristic*,
+void TouchBleClient::ackNotification(TouchBleCharacteristic*,
                                      uint8_t* data, size_t length, bool) {
   if (activeClient != nullptr) activeClient->processAck(data, length);
 }

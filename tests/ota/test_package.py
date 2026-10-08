@@ -40,3 +40,21 @@ for row in rows:
     if subtype in ('ota_0', 'ota_1'):
         assert offset % 0x10000 == 0 and size == 0x600000
 assert sum(row[2].strip() in ('ota_0', 'ota_1') for row in rows) == 2
+
+# The 10.1-inch layout keeps the same NVS and app0 offsets within 32 MB.
+rows = [line.split(',') for line in Path('partitions/touchscreen_10in_ota.csv').read_text().splitlines()
+        if line and not line.startswith('#')]
+end = 0
+for row in rows:
+    name, _, subtype, offset, size, *_ = [field.strip() for field in row]
+    offset, size = int(offset, 0), int(size, 0)
+    assert offset >= end
+    end = offset + size
+    assert end <= 32 * 1024 * 1024
+    if name == 'nvs':
+        assert offset == 0x9000 and size == 0x5000
+    if subtype == 'ota_0':
+        assert offset == 0x10000
+    if subtype in ('ota_0', 'ota_1'):
+        assert offset % 0x10000 == 0 and size == 0x800000
+assert sum(row[2].strip() in ('ota_0', 'ota_1') for row in rows) == 2

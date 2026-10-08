@@ -3,7 +3,8 @@ import hashlib
 import struct
 from pathlib import Path
 
-TARGETS = {"main_controller": 1, "touchscreen_controller": 2}
+TARGETS = {"main_controller": 1, "touchscreen_controller": 2,
+           "touchscreen_10in": 3}
 
 
 def package_image(image, environment):

@@ -435,9 +435,8 @@ void OutputController::configureRgbwOutputs() {
       }
       const uint8_t pwmChannel =
           kRgbwFirstPwmChannel + zone * kRgbwChannelCount + channel;
-      ledcSetup(pwmChannel, AppConfig::Outputs::kRgbwPwmFrequencyHz,
-                kRgbwPwmResolutionBits);
-      ledcAttachPin(pin, pwmChannel);
+      ledcAttachChannel(pin, AppConfig::Outputs::kRgbwPwmFrequencyHz,
+                kRgbwPwmResolutionBits, pwmChannel);
       writeRgbwChannel(static_cast<RgbwZone>(zone), channel, 0);
     }
   }
@@ -471,7 +470,7 @@ void OutputController::writeRgbwChannel(RgbwZone zone, uint8_t channel,
   if (!AppConfig::Outputs::kRgbwActiveHigh) {
     duty = 255U - duty;
   }
-  ledcWrite(kRgbwFirstPwmChannel + zoneIndex * kRgbwChannelCount + channel,
+  ledcWriteChannel(kRgbwFirstPwmChannel + zoneIndex * kRgbwChannelCount + channel,
             duty);
   LOG_DEBUG(kTag, "RGBW zone %u channel %u GPIO %d = %u%%", zoneIndex,
             channel, pin, percent);

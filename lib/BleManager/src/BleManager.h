@@ -13,6 +13,7 @@
 #include "SensorManager.h"
 #include "SettingsManager.h"
 #include "SystemTypes.h"
+#include "VictronAlerts.h"
 
 class NimBLECharacteristic;
 class NimBLEServer;
@@ -90,6 +91,7 @@ class BleManager {
   void processCommand(uint16_t connectionHandle, uint8_t opcode, uint8_t value);
   void publishLatestStatus();
   void publishTouchSnapshot(const SystemStatus& status, bool notify);
+  void publishTouchAlerts(const BatteryStatus& battery, bool notify);
   void queueTouchCommand(uint16_t connectionHandle, const uint8_t* data,
                          size_t length);
   void processTouchCommand();
@@ -120,6 +122,8 @@ class BleManager {
   NimBLECharacteristic* discoveryCharacteristic_ = nullptr;
   NimBLECharacteristic* touchSnapshotCharacteristic_ = nullptr;
   NimBLECharacteristic* touchAckCharacteristic_ = nullptr;
+  NimBLECharacteristic* touchAlertCharacteristic_ = nullptr;
+  uint8_t lastAlertPayload_[VictronAlerts::kPayloadSize]{};
   SystemStatus latestStatus_ = {};
   String latestDiscoveryPayload_;
   bool hasLatestStatus_ = false;

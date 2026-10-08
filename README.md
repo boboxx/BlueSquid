@@ -78,7 +78,7 @@ Hardware assignments and application constants are centralized in
 
 - `main_controller`: Controller ESP32-S3, sensors, accessory outputs, primary BLE
   control server, SP630E control, RV-C fan client and Cerbo Wi-Fi/Modbus monitoring.
-- `touchscreen_controller`: Waveshare 7-inch ESP32-S3 display, LVGL 9.5
+- `touchscreen_controller`: Waveshare 7-inch ESP32-S3 display, LVGL 9.6
   interface and persistent BLE client. BlueSquid supplies its own LVGL 9 display/touch port
   because ESP32_Display_Panel 1.0.4's bundled GUI adapter targets LVGL 8.
 - `touchscreen_10in`: Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1, built from the

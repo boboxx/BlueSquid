@@ -75,6 +75,7 @@ class TouchBleClient {
   void disconnected();
   void processSnapshot(const uint8_t* data, size_t length);
   void processAck(const uint8_t* data, size_t length);
+  void processAlerts(const uint8_t* data, size_t length);
   void startScan();
   void setConnectionStage(const char* stage);
   bool queueConfiguration(const String& command, bool config);
@@ -87,6 +88,8 @@ class TouchBleClient {
                                    size_t length, bool);
   static void ackNotification(TouchBleCharacteristic*, uint8_t* data,
                               size_t length, bool);
+  static void alertNotification(TouchBleCharacteristic*, uint8_t* data,
+                                size_t length, bool);
   static void discoveryNotification(TouchBleCharacteristic*, uint8_t* data,
                                     size_t length, bool);
 

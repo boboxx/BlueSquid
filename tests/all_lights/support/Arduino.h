@@ -12,8 +12,7 @@ int digitalRead(int pin);
 void pinMode(int pin, int mode);
 inline void digitalWrite(int, int) {}
 inline void delay(unsigned) {}
-inline void ledcSetup(unsigned, unsigned, unsigned) {}
-inline void ledcAttachPin(int, unsigned) {}
-inline void ledcWrite(unsigned, unsigned) {}
+inline bool ledcAttachChannel(int, unsigned, unsigned, unsigned) { return true; }
+inline void ledcWriteChannel(unsigned, unsigned) {}
 struct TestSerial { template<typename... Args> void printf(const char*, Args...) {} };
 inline TestSerial Serial;

@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "VictronAlerts.h"
+
 struct TouchRemoteStatus {
   float voltage = 0;
   float current = 0;
@@ -51,6 +53,9 @@ struct TouchRemoteStatus {
   uint8_t rearFirmwarePatch = 0;
   uint32_t rearUptimeSeconds = 0;
   uint32_t lastHeartbeatMs = 0;
+  // Victron alerts from the optional alert characteristic; invalid when the
+  // Controller predates it or has no current Cerbo data.
+  VictronAlerts::Snapshot alerts;
   bool anyLightsEnabled(uint8_t group = 15) const {
     for (uint8_t zone = 0; zone < 4; ++zone) {
       // Unassigned RGB slots can contain stale values after reassignment.

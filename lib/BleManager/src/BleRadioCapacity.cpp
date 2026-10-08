@@ -1,8 +1,8 @@
 #include <esp_bt.h>
 #include "Logging.h"
 
-// NimBLE 1.4 sets the ESP32 connection budget, but leaves the ESP32-S3
-// radio activity budget at the Arduino SDK default. Connections, scanning,
+// Keep the ESP32-S3 radio activity budget large enough for the host.
+// Connections, scanning,
 // and advertising share that budget. Apply the S3 setting at initialization
 // without modifying the installed framework or dependency sources.
 extern "C" esp_err_t __real_esp_bt_controller_init(esp_bt_controller_config_t*);

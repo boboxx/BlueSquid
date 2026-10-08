@@ -40,6 +40,22 @@ Reading read() {
   snprintf(out.text, sizeof(out.text), "%02u:%02u", out.minute / 60, out.minute % 60);
   return out;
 }
+void timestamp(char* out, size_t size) {
+  if (out == nullptr || size == 0) return;
+  portENTER_CRITICAL(&mux);
+  const bool known = valid, calendar = dated;
+  const int64_t value = base + seconds();
+  portEXIT_CRITICAL(&mux);
+  out[0] = '\0';
+  if (!known) return;
+  if (calendar) {
+    const time_t epoch = value; struct tm local{}; localtime_r(&epoch, &local);
+    strftime(out, size, "%Y-%m-%d %H:%M:%S", &local);
+  } else {
+    const unsigned day = static_cast<unsigned>(value % 86400);
+    snprintf(out, size, "%02u:%02u:%02u", day / 3600, day / 60 % 60, day % 60);
+  }
+}
 bool sync(int64_t epoch) {
   if (epoch < 1704067200LL || epoch > 4102444799LL) return false;
   portENTER_CRITICAL(&mux); base = epoch - seconds(); valid = dated = true; portEXIT_CRITICAL(&mux);

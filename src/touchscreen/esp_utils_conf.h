@@ -8,6 +8,9 @@
 
 // *INDENT-OFF*
 
+// Keep the application's existing C++ allocator.
+#define ESP_UTILS_CONF_MEM_ENABLE_CXX_GLOB_ALLOC (0)
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////// Check Configurations /////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -31,6 +34,8 @@
  *  - ESP_UTILS_LOG_LEVEL_ERROR:   Critical errors, software module cannot recover on its own
  *  - ESP_UTILS_LOG_LEVEL_NONE:    No log output (highest level) (Minimum code size)
  */
+#define ESP_UTILS_CONF_LOG_IMPL_TYPE (ESP_UTILS_CONF_LOG_IMPL_STDLIB)
+
 #define ESP_UTILS_CONF_LOG_LEVEL                            (ESP_UTILS_LOG_LEVEL_INFO)
 #if ESP_UTILS_CONF_LOG_LEVEL == ESP_UTILS_LOG_LEVEL_DEBUG
 
@@ -88,7 +93,7 @@
  *   3. Even if the patch version is not consistent, it will not affect normal functionality.
  */
 #define ESP_UTILS_CONF_FILE_VERSION_MAJOR 1
-#define ESP_UTILS_CONF_FILE_VERSION_MINOR 2
+#define ESP_UTILS_CONF_FILE_VERSION_MINOR 4
 #define ESP_UTILS_CONF_FILE_VERSION_PATCH 0
 
 // *INDENT-ON*

@@ -32,6 +32,7 @@
 #include "SystemTypes.h"
 
 #include "TouchBleClient.h"
+#include "VictronAlerts.h"
 #include "TouchBoard.h"
 #include "lvgl_port.h"
 
@@ -95,6 +96,8 @@ constexpr char kExportDirectory[] = "/bluesquid";
 constexpr char kExportPath[] = "/bluesquid/config-latest.json";
 constexpr char kExportTempPath[] = "/bluesquid/config.tmp";
 constexpr char kExportBackupPath[] = "/bluesquid/config.bak";
+constexpr char kAlertLogPath[] = "/bluesquid/victron-alerts.csv";
+constexpr size_t kAlertLogQueueLimit = 64;
 constexpr uint8_t kConfigurationSchemaVersion = ConfigurationJson::version;
 constexpr int kMainBrightnessTrackWidth = 304;
 constexpr uint16_t kDefaultSleepTimeoutMinutes = 5;
@@ -345,6 +348,20 @@ lv_obj_t* systemInfoOverlay = nullptr;
 lv_obj_t* systemConnectionLabel = nullptr;
 lv_obj_t* systemRearFirmwareLabel = nullptr;
 lv_obj_t* systemUptimeLabel = nullptr;
+lv_obj_t* alertBellIcons[5]{};
+lv_obj_t* powerAlertsLabel = nullptr;
+lv_obj_t* powerAlertsDetailLabel = nullptr;
+lv_obj_t* alertsOverlay = nullptr;
+lv_obj_t* alertsSummaryLabel = nullptr;
+lv_obj_t* alertsListLabel = nullptr;
+lv_obj_t* alertsLogLabel = nullptr;
+lv_obj_t* alertsSourcesLabel = nullptr;
+VictronAlerts::Tracker victronAlerts;
+std::vector<String> pendingAlertLog;
+uint32_t alertLogNextWriteMs = 0;
+uint32_t alertLogWrittenCount = 0;
+uint32_t alertLogDroppedCount = 0;
+const char* alertLogError = nullptr;
 uint32_t lastUiUpdateMs = 0;
 uint32_t calibrationRequestedMs = 0;
 bool touchscreenReady = false;
@@ -499,6 +516,8 @@ void openLabelConfiguration(lv_event_t* event);
 void openDeviceLabelEditor(lv_event_t* event);
 void applyDeviceDisplayLayout();
 void openConnectionStatus(lv_event_t* event);
+void openVictronAlerts(lv_event_t* event);
+void showVictronAlertsOnPower(lv_event_t* event);
 
 void styleTabButtons(lv_obj_t* tabs) {
   static const char* const icons[] = {
@@ -843,9 +862,16 @@ void addHeader(lv_obj_t* page, const char* title, int connectionIndex) {
                 BLUESQUID_SYMBOL_THERMOMETER " --.-°C  |  "
                 BLUESQUID_SYMBOL_HUMIDITY " --%  |  --:--",
                 207, 7, &climateFont16, kColorMuted);
-  lv_obj_set_size(headerClimateLabels[connectionIndex], 500, 30);
+  lv_obj_set_size(headerClimateLabels[connectionIndex], 465, 30);
   lv_obj_set_style_text_align(headerClimateLabels[connectionIndex],
                               LV_TEXT_ALIGN_RIGHT, 0);
+  alertBellIcons[connectionIndex] =
+      makeLabel(page, LV_SYMBOL_BELL, 684, 11, &lv_font_montserrat_22,
+                kColorMuted);
+  lv_obj_add_flag(alertBellIcons[connectionIndex], LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(alertBellIcons[connectionIndex], 8);
+  lv_obj_add_event_cb(alertBellIcons[connectionIndex],
+                      showVictronAlertsOnPower, LV_EVENT_CLICKED, nullptr);
   victronConnectionIcons[connectionIndex] =
       makeVictronConnectionIcon(page, 718, 6);
   lv_obj_add_flag(victronConnectionIcons[connectionIndex],
@@ -2954,6 +2980,293 @@ void exportConfigurationClicked(lv_event_t* event) {
   Serial.printf("Configuration exported to %s\n", kExportPath);
 }
 
+void queueAlertLog(const char* event, const char* source, const char* alert,
+                   const char* level, unsigned code, const char* detail) {
+  char stamp[24];
+  TouchClock::timestamp(stamp, sizeof(stamp));
+  const auto& status = transportClient.status();
+  char line[256];
+  snprintf(line, sizeof(line), "%s,%lu,%lu,%s,\"%s\",\"%s\",%s,%u,\"%s\"",
+           stamp, static_cast<unsigned long>(millis() / 1000UL),
+           static_cast<unsigned long>(status.rearUptimeSeconds), event,
+           source, alert, level, code, detail);
+  if (pendingAlertLog.size() >= kAlertLogQueueLimit) {
+    pendingAlertLog.erase(pendingAlertLog.begin());
+    ++alertLogDroppedCount;
+  }
+  pendingAlertLog.push_back(line);
+  Serial.printf("Victron alert: %s\n", line);
+}
+
+const char* alertLevelName(uint8_t level) {
+  return level == VictronAlerts::kAlarm ? "ALARM"
+       : level == VictronAlerts::kWarning ? "WARNING" : "OK";
+}
+
+// Appends queued alert events to the SD card. Without a card the events stay
+// queued (newest 64) and the write is retried every minute.
+void flushAlertLog() {
+  if (pendingAlertLog.empty() ||
+      static_cast<int32_t>(millis() - alertLogNextWriteMs) < 0)
+    return;
+  alertLogNextWriteMs = millis() + 60000UL;
+  if (!mountSdCard()) {
+    alertLogError = sdMountError;
+    return;
+  }
+  if (!sdCard.exists(kExportDirectory) && !sdCard.mkdir(kExportDirectory)) {
+    alertLogError = "Unable to create /bluesquid on the SD card.";
+    sdMounted = false;
+    return;
+  }
+  const bool created = !sdCard.exists(kAlertLogPath);
+  File file = sdCard.open(kAlertLogPath, FILE_APPEND);
+  if (!file) {
+    alertLogError = "Unable to open the alert log on the SD card.";
+    sdMounted = false;
+    return;
+  }
+  if (created)
+    file.println("date_time,touchscreen_uptime_s,controller_uptime_s,event,"
+                 "source,alert,level,code,detail");
+  for (const String& line : pendingAlertLog) file.println(line);
+  file.close();
+  alertLogWrittenCount += pendingAlertLog.size();
+  pendingAlertLog.clear();
+  alertLogError = nullptr;
+  alertLogNextWriteMs = millis() + 2000UL;
+}
+
+String alertTitle(const VictronAlerts::Tracker::Entry& entry) {
+  String title = VictronAlerts::sourceName(entry.id);
+  title += " - ";
+  title += VictronAlerts::alertName(entry.id);
+  if (entry.code != 0) {
+    title += " ";
+    title += String(entry.code);
+    const char* detail = VictronAlerts::codeName(entry.id, entry.code);
+    if (*detail) {
+      title += ": ";
+      title += detail;
+    }
+  }
+  return title;
+}
+
+void refreshVictronAlertsList() {
+  if (alertsListLabel == nullptr) return;
+  if (victronAlerts.count() == 0) {
+    lv_label_set_text(alertsListLabel,
+                      "No Victron alerts since the touchscreen started.");
+    return;
+  }
+  String text;
+  for (uint8_t index = 0; index < victronAlerts.count(); ++index) {
+    const auto& entry = victronAlerts.entry(index);
+    const bool alarm = entry.level == VictronAlerts::kAlarm;
+    if (index) text += "\n\n";
+    text += entry.active ? (alarm ? "#FF6B70 " : "#FFBE55 ") : "#9AA7AE ";
+    text += alertLevelName(entry.level);
+    text += "#  ";
+    text += alertTitle(entry);
+    text += "\n#9AA7AE ";
+    text += entry.raised[0] ? entry.raised : "Time unknown";
+    if (!entry.active) {
+      text += "  -  Cleared ";
+      text += entry.cleared[0] ? entry.cleared : "";
+    } else {
+      text += entry.acknowledged ? "  -  Active, acknowledged"
+                                 : "  -  Active, not acknowledged";
+    }
+    text += "#";
+  }
+  lv_label_set_text(alertsListLabel, text.c_str());
+}
+
+void refreshVictronAlerts(const TouchRemoteStatus& status, bool online) {
+  static uint32_t displayedRevision = UINT32_MAX;
+  static uint8_t displayedState = 255;
+  const auto& alerts = status.alerts;
+  if (online && alerts.valid) {
+    VictronAlerts::Tracker::Event events[VictronAlerts::kAlertCount * 2];
+    char stamp[VictronAlerts::Tracker::kTimeLength];
+    TouchClock::timestamp(stamp, sizeof(stamp));
+    const uint8_t count = victronAlerts.update(
+        alerts, stamp, events, VictronAlerts::kAlertCount * 2);
+    for (uint8_t index = 0; index < count; ++index) {
+      const auto& event = events[index];
+      queueAlertLog(event.kind == VictronAlerts::Tracker::kRaised
+                        ? "RAISED" : "CLEARED",
+                    VictronAlerts::sourceName(event.id),
+                    VictronAlerts::alertName(event.id),
+                    alertLevelName(event.level), event.code,
+                    VictronAlerts::codeName(event.id, event.code));
+    }
+  }
+  flushAlertLog();
+
+  const uint8_t unacknowledged = victronAlerts.unacknowledgedLevel();
+  const uint8_t active = victronAlerts.activeCount();
+  const uint32_t bellColor =
+      unacknowledged == VictronAlerts::kAlarm ? kColorRed
+      : unacknowledged == VictronAlerts::kWarning ? kColorAmber
+      : active ? kColorText : kColorMuted;
+  // Data state: 0 offline, 1 no alert data, 2 current.
+  const uint8_t state = !online ? 0 : alerts.valid ? 2 : 1;
+  if (victronAlerts.revision() != displayedRevision || state != displayedState) {
+    displayedRevision = victronAlerts.revision();
+    displayedState = state;
+    for (lv_obj_t* bell : alertBellIcons)
+      if (bell) lv_obj_set_style_text_color(bell, lv_color_hex(bellColor), 0);
+
+    const VictronAlerts::Tracker::Entry* mostSevere = nullptr;
+    for (uint8_t index = 0; index < victronAlerts.count(); ++index) {
+      const auto& entry = victronAlerts.entry(index);
+      if (entry.active && (mostSevere == nullptr ||
+                           entry.level > mostSevere->level))
+        mostSevere = &entry;
+    }
+    if (powerAlertsLabel != nullptr) {
+      if (active) lv_label_set_text_fmt(powerAlertsLabel, "%u active", active);
+      else lv_label_set_text(powerAlertsLabel, state == 2 ? "None active" : "--");
+      lv_obj_set_style_text_color(powerAlertsLabel, lv_color_hex(
+          active ? (mostSevere->level == VictronAlerts::kAlarm ? kColorRed
+                                                                 : kColorAmber)
+                 : kColorText), 0);
+      lv_label_set_text(powerAlertsDetailLabel,
+          mostSevere != nullptr ? alertTitle(*mostSevere).c_str()
+          : state == 0 ? "Controller offline"
+          : state == 1 ? "Waiting for Cerbo GX data"
+          : "All monitored Victron devices OK");
+    }
+    if (alertsSummaryLabel != nullptr) {
+      String summary;
+      if (state == 0) summary = "Controller offline - alert status unknown. ";
+      else if (state == 1) summary = "Waiting for Victron data from the Cerbo GX. ";
+      if (active) {
+        summary += String(active) + (active == 1 ? " active alert" : " active alerts");
+        if (unacknowledged) summary += ", not acknowledged";
+      } else if (state == 2) {
+        summary += "No active Victron alerts";
+      }
+      lv_label_set_text(alertsSummaryLabel, summary.c_str());
+    }
+    refreshVictronAlertsList();
+  }
+
+  if (alertsOverlay != nullptr &&
+      !lv_obj_has_flag(alertsOverlay, LV_OBJ_FLAG_HIDDEN)) {
+    String sources = "Monitoring: ";
+    if (alerts.sources == 0) {
+      sources += "no Victron devices reported yet";
+    } else {
+      const char* names[] = {"Inverter/charger", "Battery monitor",
+                             "Solar charger"};
+      bool first = true;
+      for (uint8_t bit = 0; bit < 3; ++bit) {
+        if (!(alerts.sources & (1U << bit))) continue;
+        if (!first) sources += ", ";
+        sources += names[bit];
+        first = false;
+      }
+    }
+    lv_label_set_text(alertsSourcesLabel, sources.c_str());
+    char log[160];
+    if (alertLogError != nullptr)
+      snprintf(log, sizeof(log), "SD log: %s %u event(s) waiting.",
+               alertLogError, static_cast<unsigned>(pendingAlertLog.size()));
+    else
+      snprintf(log, sizeof(log), "SD log: %s  (%lu event(s) written%s)",
+               kAlertLogPath, static_cast<unsigned long>(alertLogWrittenCount),
+               alertLogDroppedCount ? ", some dropped without a card" : "");
+    lv_label_set_text(alertsLogLabel, log);
+    lv_obj_set_style_text_color(alertsLogLabel, lv_color_hex(
+        alertLogError ? kColorAmber : kColorMuted), 0);
+  }
+}
+
+void acknowledgeAlertsClicked(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  const uint8_t count = victronAlerts.acknowledgeAll();
+  if (count)
+    queueAlertLog("ACKNOWLEDGED", "Touchscreen", "All alerts", "", count, "");
+}
+
+void clearAlertsClicked(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  const uint8_t removed = victronAlerts.clearInactive();
+  queueAlertLog("HISTORY_CLEARED", "Touchscreen", "Inactive alerts", "",
+                removed, "Active alerts acknowledged");
+}
+
+void openVictronAlerts(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || alertsOverlay == nullptr)
+    return;
+  lv_obj_remove_flag(alertsOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(alertsOverlay);
+  lv_obj_scroll_to_y(lv_obj_get_parent(alertsListLabel), 0, LV_ANIM_OFF);
+}
+
+// The header bell leads to the alerts on the Power tab.
+void showVictronAlertsOnPower(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (tabView != nullptr && lv_tabview_get_tab_active(tabView) != 3) {
+    lv_tabview_set_active(tabView, 3, LV_ANIM_OFF);
+    syncTabButtonLabels(tabView);
+  }
+  dismissMenuPages();
+  openVictronAlerts(event);
+}
+
+lv_obj_t* makeAlertsButton(lv_obj_t* parent, int x, const char* text,
+                           lv_event_cb_t callback) {
+  lv_obj_t* button = lv_button_create(parent);
+  lv_obj_set_pos(button, x, 8);
+  lv_obj_set_size(button, 165, 42);
+  lv_obj_set_style_radius(button, 14, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(kColorSurface), 0);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(kColorBorder), 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t* label = lv_label_create(button);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(kColorText), 0);
+  lv_obj_center(label);
+  return button;
+}
+
+void createVictronAlertsOverlay() {
+  alertsOverlay = createPageOverlay("Notifications");
+  makeAlertsButton(alertsOverlay, 432, LV_SYMBOL_OK "  Acknowledge",
+                   acknowledgeAlertsClicked);
+  makeAlertsButton(alertsOverlay, 609, LV_SYMBOL_TRASH "  Clear",
+                   clearAlertsClicked);
+  alertsSummaryLabel = makeLabel(alertsOverlay, "", 18, 60,
+                                 &lv_font_montserrat_16, kColorText);
+  lv_obj_set_width(alertsSummaryLabel, 764);
+  lv_obj_t* listCard = makeCard(alertsOverlay, 16, 88, 768, 262);
+  lv_obj_set_style_bg_color(listCard, lv_color_hex(kColorCard), 0);
+  lv_obj_add_flag(listCard, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(listCard, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(listCard, LV_SCROLLBAR_MODE_AUTO);
+  lv_obj_set_style_pad_all(listCard, 16, 0);
+  alertsListLabel = makeLabel(listCard, "", 0, 0, &lv_font_montserrat_14,
+                              kColorText);
+  lv_label_set_recolor(alertsListLabel, true);
+  lv_obj_set_width(alertsListLabel, 724);
+  lv_label_set_long_mode(alertsListLabel, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_line_space(alertsListLabel, 4, 0);
+  alertsSourcesLabel = makeLabel(alertsOverlay, "", 18, 358,
+                                 &lv_font_montserrat_12, kColorMuted);
+  lv_obj_set_width(alertsSourcesLabel, 764);
+  alertsLogLabel = makeLabel(alertsOverlay, "", 18, 380,
+                             &lv_font_montserrat_12, kColorMuted);
+  lv_obj_set_width(alertsLogLabel, 764);
+  lv_label_set_long_mode(alertsLogLabel, LV_LABEL_LONG_DOT);
+}
+
 void addMenuHitTarget(lv_obj_t* panel, int y, lv_event_cb_t callback) {
   lv_obj_t* target = lv_obj_create(panel);
   lv_obj_set_pos(target, 0, y);
@@ -3999,12 +4312,26 @@ void buildUi() {
   addHeader(power, "Power", 3);
   makeLabel(power, "Dashboard", 18, 55, &lv_font_montserrat_16, kColorText);
   addHomePowerSummary(power);
-  batteryLabel = addDetailCard(power, 16, 196, 376, 187,
+  batteryLabel = addDetailCard(power, 16, 196, 248, 187,
                                LV_SYMBOL_BATTERY_3,
                                "Battery details", kColorGreen);
   powerLabel = nullptr;
-  remainingLabel = addDetailCard(power, 408, 196, 376, 187, LV_SYMBOL_DRIVE,
+  remainingLabel = addDetailCard(power, 272, 196, 248, 187, LV_SYMBOL_DRIVE,
                                  "Remaining", kColorAmber);
+  powerAlertsLabel = addDetailCard(power, 528, 196, 256, 187, LV_SYMBOL_BELL,
+                                   "Victron alerts", kColorAmber);
+  lv_obj_t* alertsCard = lv_obj_get_parent(powerAlertsLabel);
+  lv_obj_add_flag(alertsCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(alertsCard, openVictronAlerts, LV_EVENT_CLICKED,
+                      nullptr);
+  makeLabel(alertsCard, LV_SYMBOL_RIGHT, 226, 24, &lv_font_montserrat_16,
+            kColorMuted);
+  powerAlertsDetailLabel = makeLabel(alertsCard, "", 18, 92,
+                                     &lv_font_montserrat_14, kColorMuted);
+  lv_obj_set_size(powerAlertsDetailLabel, 224, 60);
+  lv_label_set_long_mode(powerAlertsDetailLabel, LV_LABEL_LONG_DOT);
+  makeLabel(alertsCard, "Tap to view or acknowledge", 18, 158,
+            &lv_font_montserrat_12, kColorMuted);
 
   addHeader(lights, "Light", 1);
 
@@ -4056,11 +4383,12 @@ void buildUi() {
   lv_obj_set_style_radius(menuPanel, 3, LV_PART_SCROLLBAR);
   lv_obj_set_style_pad_right(menuPanel, 12, 0);
   addMenuRow(menuPanel, 0, LV_SYMBOL_REFRESH, "History", "Energy history and trends", kColorCyan, true);
-  addMenuRow(menuPanel, 67, LV_SYMBOL_BELL, "Notifications", "Warnings and system events", kColorAmber, true);
+  addMenuRow(menuPanel, 67, LV_SYMBOL_BELL, "Notifications", "Victron alerts, acknowledgement and SD card log", kColorAmber, true);
   addMenuRow(menuPanel, 134, LV_SYMBOL_SETTINGS, "System Configuration", "Device assignments, backup and restore", kColorGreen, true);
   addMenuRow(menuPanel, 201, LV_SYMBOL_REFRESH, "Camper Position", "Pitch, roll and level calibration", kColorCyan, true);
   addMenuRow(menuPanel, 268, LV_SYMBOL_EYE_OPEN, "Display", "Brightness, sleep and overnight schedule", kColorAmber, true);
   addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "About BlueSquid, firmware and diagnostics", kColorMuted, false);
+  addMenuHitTarget(menuPanel, 67, openVictronAlerts);
   addMenuHitTarget(menuPanel, 134, openSettings);
   addMenuHitTarget(menuPanel, 201, openCamperPosition);
   addMenuHitTarget(menuPanel, 268, openDisplaySettings);
@@ -4074,6 +4402,7 @@ void buildUi() {
   createRvcFanOverlay();
   createLabelConfigurationOverlays();
   createSystemInfoOverlay();
+  createVictronAlertsOverlay();
   matchKeyboardCheckButtons();
   lv_obj_add_event_cb(tabs, tabNavigationChanged,
                       LV_EVENT_VALUE_CHANGED, nullptr);
@@ -4277,6 +4606,7 @@ void refreshUi() {
     }
   }
   refreshFanCard(online);
+  refreshVictronAlerts(status, online);
   const bool outputStates[] = {status.usb, status.pump, status.accessory3,
                                status.accessory4};
   for (int i = 0; i < 4; ++i) {

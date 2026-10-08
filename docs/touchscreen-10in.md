@@ -58,6 +58,18 @@ upload, watch the serial log at 115200 baud:
 
 ## Build environment notes
 
-pioarduino 55.x (the P4 platform) removes other Arduino framework versions
-when it builds. Switching between `touchscreen_10in` and the other two
-environments therefore re-downloads the framework, about 90 seconds per switch.
+All three targets use pioarduino 55.03.312-1 with Arduino-ESP32 3.3.12
+(ESP-IDF 5.5.5). The board support remains based on Waveshare's Arduino
+3.3.11 examples. Both touchscreen targets use LVGL 9.6.0, ESP32 IO Expander
+1.1.1, ArduinoJson 7.4.3 and esp-lib-utils 0.2.3. Display Panel 1.0.4 requires
+esp-lib-utils below 0.3.0, so that incompatible release is not selected.
+
+The Controller and 7-inch touchscreen use NimBLE-Arduino 2.5.1. On the first
+boot after upgrading, legacy pairing records are converted once before BLE
+starts, followed by an automatic restart. Unknown record formats stop BLE
+initialization rather than discard existing pairings. See
+[dependency updates](dependency-updates.md) for backups and rollback details.
+
+Run a clean build after changing framework versions. Explicit Arduino package
+overrides are omitted: the pinned platform supplies its matching core/libraries
+and applies its build-script fix.

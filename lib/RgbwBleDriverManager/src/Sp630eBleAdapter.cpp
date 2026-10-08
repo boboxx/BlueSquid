@@ -21,9 +21,9 @@ NimBLEAddress scanTargetAddress;
 bool scanTargetFound = false;
 }
 
-class Sp630eAdvertisedCallbacks final : public NimBLEAdvertisedDeviceCallbacks {
+class Sp630eAdvertisedCallbacks final : public NimBLEScanCallbacks {
  public:
-  void onResult(NimBLEAdvertisedDevice* device) override {
+  void onResult(const NimBLEAdvertisedDevice* device) override {
     if (!device) return;
     const NimBLEAddress peer = device->getAddress();
     const std::string address = peer.toString();
@@ -53,7 +53,7 @@ static Sp630eAdvertisedCallbacks discoveryCallbacks;
 class Sp630eClientCallbacks final : public NimBLEClientCallbacks {
  public:
   explicit Sp630eClientCallbacks(Sp630eBleAdapter& owner) : owner_(owner) {}
-  void onDisconnect(NimBLEClient*) override { owner_.disconnected(); }
+  void onDisconnect(NimBLEClient*, int reason) override { owner_.disconnected(); }
   bool onConnParamsUpdateRequest(NimBLEClient*, const ble_gap_upd_params* params) override {
     // L2CAP requests otherwise bypass our initial connection parameters.
     const bool accept = params->itvl_min == kConnectionInterval &&
@@ -91,7 +91,7 @@ void Sp630eBleAdapter::begin() {
   }
   client_->setClientCallbacks(new Sp630eClientCallbacks(*this), true);
   client_->setConnectionParams(kConnectionInterval, kConnectionInterval, 0, 300);
-  client_->setConnectTimeout(4);
+  client_->setConnectTimeout(4000);
   LOG_INFO(kTag, "%s: starting status worker for %s", label_, configuredAddress_.c_str());
   if (xTaskCreate(taskEntry, "sp630e", 6144, this, 1, &task_) != pdPASS) {
     task_ = nullptr;
@@ -377,7 +377,7 @@ bool Sp630eBleAdapter::connect() {
   // Rediscover it before connecting, as the original advertised-device path
   // did. Copy the address value; never retain a pointer into scan results.
   NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setAdvertisedDeviceCallbacks(&discoveryCallbacks, false);
+  scan->setScanCallbacks(&discoveryCallbacks, false);
   scan->setActiveScan(true);
   scan->setInterval(80);
   scan->setWindow(40);
@@ -387,7 +387,7 @@ bool Sp630eBleAdapter::connect() {
   strlcpy(scanTarget, configuredAddress_.c_str(), sizeof(scanTarget));
   scanTargetFound = false;
   portEXIT_CRITICAL(&discoveryMutex);
-  scan->start(2, false);
+  scan->getResults(2000, false);
   portENTER_CRITICAL(&discoveryMutex);
   const bool found = scanTargetFound;
   const NimBLEAddress address = scanTargetAddress;
@@ -407,12 +407,12 @@ bool Sp630eBleAdapter::connect() {
   // compares service layout without writing any manufacturer configuration.
   if (!servicesLogged_) {
     servicesLogged_ = true;
-    auto* services = client_->getServices(true);
-    if (services) for (auto* discovered : *services) {
+    const auto& services = client_->getServices(true);
+    for (auto* discovered : services) {
       LOG_INFO(kTag, "%s: GATT service=%s", label_,
                discovered->getUUID().toString().c_str());
-      auto* characteristics = discovered->getCharacteristics(true);
-      if (characteristics) for (auto* characteristic : *characteristics) {
+      const auto& characteristics = discovered->getCharacteristics(true);
+      for (auto* characteristic : characteristics) {
         LOG_INFO(kTag, "%s: GATT characteristic=%s handle=%u read=%u write=%u writeNR=%u notify=%u indicate=%u",
                  label_, characteristic->getUUID().toString().c_str(),
                  characteristic->getHandle(), characteristic->canRead(),
@@ -504,11 +504,11 @@ bool Sp630eBleAdapter::requestDiscovery() {
   portEXIT_CRITICAL(&discoveryMutex);
   NimBLEScan* scan = NimBLEDevice::getScan();
   if (scan->isScanning()) scan->stop();
-  scan->setAdvertisedDeviceCallbacks(&discoveryCallbacks, false);
+  scan->setScanCallbacks(&discoveryCallbacks, false);
   scan->setActiveScan(true);
   scan->setInterval(80);
   scan->setWindow(40);
-  const bool started = scan->start(5, nullptr, false);
+  const bool started = scan->start(5000, false);
   if (connectMutex) xSemaphoreGive(connectMutex);
   return started;
 }

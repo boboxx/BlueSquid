@@ -1,5 +1,6 @@
 #include "BleManager.h"
 #include "FirmwareUpdate.h"
+#include "BleBondMigration.h"
 
 #include <NimBLEDevice.h>
 
@@ -10,6 +11,7 @@
 #include "BlueSquidBleProtocol.h"
 #include "Logging.h"
 #include "Sp630eBleAdapter.h"
+#include "VictronAlerts.h"
 
 namespace {
 constexpr char kTag[] = "BLE";
@@ -74,9 +76,9 @@ class BleServerCallbacks final : public NimBLEServerCallbacks {
  public:
   explicit BleServerCallbacks(BleManager& manager) : manager_(manager) {}
 
-  void onConnect(NimBLEServer* server, ble_gap_conn_desc* description) override {
+  void onConnect(NimBLEServer* server, NimBLEConnInfo& description) override {
     const uint8_t count = static_cast<uint8_t>(server->getConnectedCount());
-    manager_.registerClient(description->conn_handle);
+    manager_.registerClient(description.getConnHandle());
     manager_.setConnectedClientCount(count);
     LOG_INFO(kTag, "Client connected (%u/%u)", count,
              CONFIG_BT_NIMBLE_MAX_CONNECTIONS);
@@ -86,9 +88,9 @@ class BleServerCallbacks final : public NimBLEServerCallbacks {
     }
   }
 
-  void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* description) override {
+  void onDisconnect(NimBLEServer* server, NimBLEConnInfo& description, int reason) override {
     const uint8_t count = static_cast<uint8_t>(server->getConnectedCount());
-    manager_.unregisterClient(description->conn_handle);
+    manager_.unregisterClient(description.getConnHandle());
     manager_.setConnectedClientCount(count);
     LOG_INFO(kTag, "Client disconnected (%u/%u)", count,
              CONFIG_BT_NIMBLE_MAX_CONNECTIONS);
@@ -97,17 +99,17 @@ class BleServerCallbacks final : public NimBLEServerCallbacks {
     }
   }
 
-  void onAuthenticationComplete(ble_gap_conn_desc* description) override {
-    if (!description->sec_state.encrypted) {
+  void onAuthenticationComplete(NimBLEConnInfo& description) override {
+    if (!description.isEncrypted()) {
       LOG_INFO(kTag, "Connection %u using unencrypted local control session",
-               description->conn_handle);
+               description.getConnHandle());
       return;
     }
 
     LOG_INFO(kTag, "Connection %u secured (bonded=%s)",
-             description->conn_handle,
-             description->sec_state.bonded ? "yes" : "no");
-    manager_.requestClientVerification(description->conn_handle);
+             description.getConnHandle(),
+             description.isBonded() ? "yes" : "no");
+    manager_.requestClientVerification(description.getConnHandle());
   }
 
  private:
@@ -119,7 +121,7 @@ class BleCommandCallbacks final : public NimBLECharacteristicCallbacks {
   explicit BleCommandCallbacks(BleManager& manager) : manager_(manager) {}
 
   void onWrite(NimBLECharacteristic* characteristic,
-               ble_gap_conn_desc* description) override {
+               NimBLEConnInfo& description) override {
     const std::string value = characteristic->getValue();
     if (value.size() != 3 ||
         static_cast<uint8_t>(value[0]) != AppConfig::Ble::kProtocolVersion) {
@@ -130,10 +132,10 @@ class BleCommandCallbacks final : public NimBLECharacteristicCallbacks {
 
     const uint8_t opcode = static_cast<uint8_t>(value[1]);
     const uint8_t commandValue = static_cast<uint8_t>(value[2]);
-    manager_.recordClientActivity(description->conn_handle);
+    manager_.recordClientActivity(description.getConnHandle());
 
     if (opcode == static_cast<uint8_t>(Command::ClientRole)) {
-      manager_.setClientPrimary(description->conn_handle, commandValue != 0);
+      manager_.setClientPrimary(description.getConnHandle(), commandValue != 0);
       return;
     }
 
@@ -141,7 +143,7 @@ class BleCommandCallbacks final : public NimBLECharacteristicCallbacks {
       return;
     }
 
-    manager_.queueCommand(description->conn_handle, opcode, commandValue);
+    manager_.queueCommand(description.getConnHandle(), opcode, commandValue);
   }
 
  private:
@@ -152,11 +154,11 @@ class BleStatusCallbacks final : public NimBLECharacteristicCallbacks {
  public:
   explicit BleStatusCallbacks(BleManager& manager) : manager_(manager) {}
 
-  void onSubscribe(NimBLECharacteristic*, ble_gap_conn_desc* description,
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& description,
                    uint16_t subscriptionValue) override {
-    manager_.recordClientActivity(description->conn_handle);
+    manager_.recordClientActivity(description.getConnHandle());
     LOG_INFO(kTag, "Connection %u status notifications %s",
-             description->conn_handle,
+             description.getConnHandle(),
              subscriptionValue != 0 ? "enabled" : "disabled");
 
     if (subscriptionValue != 0) manager_.statusRefreshRequested_.store(true);
@@ -171,12 +173,12 @@ class BleTouchCommandCallbacks final : public NimBLECharacteristicCallbacks {
   explicit BleTouchCommandCallbacks(BleManager& manager) : manager_(manager) {}
 
   void onWrite(NimBLECharacteristic* characteristic,
-               ble_gap_conn_desc* description) override {
+               NimBLEConnInfo& description) override {
     const std::string value = characteristic->getValue();
-    manager_.recordClientActivity(description->conn_handle);
-    manager_.setClientPrimary(description->conn_handle, true);
+    manager_.recordClientActivity(description.getConnHandle());
+    manager_.setClientPrimary(description.getConnHandle(), true);
     manager_.queueTouchCommand(
-        description->conn_handle,
+        description.getConnHandle(),
         reinterpret_cast<const uint8_t*>(value.data()), value.size());
   }
 
@@ -190,10 +192,10 @@ class BleTouchSnapshotCallbacks final
   explicit BleTouchSnapshotCallbacks(BleManager& manager)
       : manager_(manager) {}
 
-  void onSubscribe(NimBLECharacteristic*, ble_gap_conn_desc* description,
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& description,
                    uint16_t subscriptionValue) override {
-    manager_.recordClientActivity(description->conn_handle);
-    manager_.setClientPrimary(description->conn_handle,
+    manager_.recordClientActivity(description.getConnHandle());
+    manager_.setClientPrimary(description.getConnHandle(),
                               subscriptionValue != 0);
     if (subscriptionValue != 0) manager_.statusRefreshRequested_.store(true);
   }
@@ -207,8 +209,8 @@ class BleConfigCallbacks final : public NimBLECharacteristicCallbacks {
   explicit BleConfigCallbacks(BleManager& manager) : manager_(manager) {}
 
   void onRead(NimBLECharacteristic* characteristic,
-              ble_gap_conn_desc* description) override {
-    manager_.recordClientActivity(description->conn_handle);
+              NimBLEConnInfo& description) override {
+    manager_.recordClientActivity(description.getConnHandle());
     char value[24] = {};
     snprintf(value, sizeof(value), "capacityAh=%.1f",
              manager_.batteryManager_.capacityAh());
@@ -216,9 +218,9 @@ class BleConfigCallbacks final : public NimBLECharacteristicCallbacks {
   }
 
   void onWrite(NimBLECharacteristic* characteristic,
-               ble_gap_conn_desc* description) override {
-    manager_.recordClientActivity(description->conn_handle);
-    manager_.queueConfigWrite(description->conn_handle, false,
+               NimBLEConnInfo& description) override {
+    manager_.recordClientActivity(description.getConnHandle());
+    manager_.queueConfigWrite(description.getConnHandle(), false,
                               characteristic->getValue());
   }
 
@@ -229,14 +231,14 @@ class BleConfigCallbacks final : public NimBLECharacteristicCallbacks {
 class BleOtaCredentialsCallbacks final : public NimBLECharacteristicCallbacks {
  public:
   explicit BleOtaCredentialsCallbacks(BleManager& manager) : manager_(manager) {}
-  void onRead(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
+  void onRead(NimBLECharacteristic* characteristic, NimBLEConnInfo& description) override {
     uint8_t ack[4]{};
-    if (description && manager_.clientTrusted(description->conn_handle))
+    if (manager_.clientTrusted(description.getConnHandle()))
       OtaCredentials::writeId(ack, FirmwareUpdate::credentialsAcknowledgement());
     characteristic->setValue(ack, sizeof(ack));
   }
-  void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
-    if (!description || !manager_.clientTrusted(description->conn_handle)) return;
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& description) override {
+    if (!manager_.clientTrusted(description.getConnHandle())) return;
     const std::string bytes = characteristic->getValue();
     OtaCredentials::Value value;
     uint32_t id = 0;
@@ -255,14 +257,14 @@ class BleOtaLinkCallbacks final : public NimBLECharacteristicCallbacks {
  public:
   explicit BleOtaLinkCallbacks(BleManager& manager)
       : manager_(manager), wifi_(manager.cerboWifi_) {}
-  void onRead(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
-    if (!description || !manager_.clientTrusted(description->conn_handle)) return;
+  void onRead(NimBLECharacteristic* characteristic, NimBLEConnInfo& description) override {
+    if (!manager_.clientTrusted(description.getConnHandle())) return;
     uint8_t bytes[OtaLink::kStatusSize]{};
     OtaLink::encode(bytes, wifi_.updateNetworkStatus());
     characteristic->setValue(bytes, sizeof(bytes));
   }
-  void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* description) override {
-    if (!description || !manager_.clientTrusted(description->conn_handle)) return;
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& description) override {
+    if (!manager_.clientTrusted(description.getConnHandle())) return;
     const auto bytes = characteristic->getValue();
     if (bytes.size() == 5 && static_cast<uint8_t>(bytes[0]) <= 1)
       wifi_.requestUpdateNetwork(bytes[0] != 0, OtaCredentials::readId(
@@ -279,9 +281,9 @@ class BleDiscoveryCallbacks final : public NimBLECharacteristicCallbacks {
 
   // Reads return the value the main loop last stored with setValue().
   void onWrite(NimBLECharacteristic* characteristic,
-               ble_gap_conn_desc* description) override {
-    manager_.recordClientActivity(description->conn_handle);
-    manager_.queueConfigWrite(description->conn_handle, true,
+               NimBLEConnInfo& description) override {
+    manager_.recordClientActivity(description.getConnHandle());
+    manager_.queueConfigWrite(description.getConnHandle(), true,
                               characteristic->getValue());
   }
 
@@ -303,6 +305,8 @@ BleManager::BleManager(EventManager& eventManager,
       cerboWifi_(cerboWifi) {}
 
 bool BleManager::begin() {
+  static_assert(MYNEWT_VAL(BLE_MAX_CONNECTIONS) == 6, "Controller needs six BLE links");
+  static_assert(MYNEWT_VAL(BLE_STORE_MAX_BONDS) == 6, "Preserve all six BLE bond slots");
   static_assert(MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL) == 20,
                 "Multi-link BLE requires prompt receive-credit returns");
   char deviceName[24] = {};
@@ -310,6 +314,10 @@ bool BleManager::begin() {
   snprintf(deviceName, sizeof(deviceName), "%s-%04X",
            AppConfig::kBleDeviceName, deviceSuffix);
 
+  if (!prepareBleBondStorage()) {
+    LOG_ERROR(kTag, "BLE pairing storage migration failed; BLE remains stopped");
+    return false;
+  }
   NimBLEDevice::init(deviceName);
   NimBLEDevice::setMTU(Sp630eProtocol::kPreferredMtu);
   LOG_INFO(kTag, "BLE receive-credit interval: %u ms", MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL));
@@ -389,6 +397,13 @@ bool BleManager::begin() {
       BlueSquidBle::kAckUuid,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
           NIMBLE_PROPERTY::READ_ENC);
+  touchAlertCharacteristic_ = touchService->createCharacteristic(
+      VictronAlerts::kUuid,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
+          NIMBLE_PROPERTY::READ_ENC);
+  uint8_t noAlerts[VictronAlerts::kPayloadSize]{};
+  VictronAlerts::encode(VictronAlerts::Snapshot(), noAlerts);
+  touchAlertCharacteristic_->setValue(noAlerts, sizeof(noAlerts));
   touchService->start();
 
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
@@ -396,7 +411,8 @@ bool BleManager::begin() {
   // Keep the legacy service in the limited advertising payload so existing
   // iOS discovery continues to work. The touchscreen matches this UUID,
   // then discovers its dedicated service after connecting.
-  advertising->setScanResponse(true);
+  advertising->enableScanResponse(true);
+  advertising->setName(deviceName);  // NimBLE 2.x no longer adds the GAP name.
   advertising->start();
 
   LOG_INFO(kTag, "Advertising as %s", deviceName);
@@ -772,6 +788,26 @@ void BleManager::publishTouchSnapshot(const SystemStatus& status,
                          scaledUnsigned(status.battery.loadEnergyWh, 1.0F));
   touchSnapshotCharacteristic_->setValue(packet, sizeof(packet));
   if (notify) touchSnapshotCharacteristic_->notify(packet, sizeof(packet));
+  publishTouchAlerts(status.battery, notify);
+}
+
+void BleManager::publishTouchAlerts(const BatteryStatus& battery, bool notify) {
+  if (touchAlertCharacteristic_ == nullptr) return;
+  VictronAlerts::Snapshot alerts;
+  alerts.valid = battery.alertsValid;
+  alerts.sources = battery.alertSources;
+  alerts.warnings = battery.alertWarnings;
+  alerts.alarms = battery.alertAlarms;
+  alerts.vebusError = battery.vebusError;
+  alerts.solarError = battery.solarError;
+  uint8_t payload[VictronAlerts::kPayloadSize]{};
+  VictronAlerts::encode(alerts, payload);
+  // Alerts change rarely; notify only on change. A reconnecting touchscreen
+  // reads the current value after subscribing.
+  if (memcmp(payload, lastAlertPayload_, sizeof(payload)) == 0) return;
+  memcpy(lastAlertPayload_, payload, sizeof(payload));
+  touchAlertCharacteristic_->setValue(payload, sizeof(payload));
+  if (notify) touchAlertCharacteristic_->notify(payload, sizeof(payload));
 }
 
 void BleManager::queueTouchCommand(uint16_t connectionHandle,

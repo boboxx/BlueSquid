@@ -41,6 +41,13 @@ struct BatteryStatus {
   bool solarValid = false;
   bool dcDcValid = false;
   bool valid = false;
+  // Victron alerts; see VictronAlerts.h for the mask bit assignments.
+  uint32_t alertWarnings = 0;
+  uint32_t alertAlarms = 0;
+  uint8_t vebusError = 0;
+  uint8_t solarError = 0;
+  uint8_t alertSources = 0;
+  bool alertsValid = false;
 };
 
 struct SensorStatus {

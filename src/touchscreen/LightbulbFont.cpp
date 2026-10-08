@@ -442,6 +442,8 @@ const void* getGlyphBitmapClimate24(lv_font_glyph_dsc_t* dsc,
 }  // namespace
 
 const lv_font_t bluesquid_font_lightbulb_14 = {
+    .dsc = nullptr,
+    .fallback = nullptr,
     .get_glyph_dsc = getGlyphDsc14,
     .get_glyph_bitmap = getGlyphBitmap14,
     .line_height = 18,
@@ -450,11 +452,11 @@ const lv_font_t bluesquid_font_lightbulb_14 = {
     .static_bitmap = 1,
     .underline_position = -2,
     .underline_thickness = 1,
-    .dsc = nullptr,
-    .fallback = nullptr,
 };
 
 const lv_font_t bluesquid_font_lightbulb_28 = {
+    .dsc = nullptr,
+    .fallback = nullptr,
     .get_glyph_dsc = getGlyphDsc28,
     .get_glyph_bitmap = getGlyphBitmap28,
     .line_height = 32,
@@ -463,11 +465,11 @@ const lv_font_t bluesquid_font_lightbulb_28 = {
     .static_bitmap = 1,
     .underline_position = -3,
     .underline_thickness = 1,
-    .dsc = nullptr,
-    .fallback = nullptr,
 };
 
 const lv_font_t bluesquid_font_sun_24 = {
+    .dsc = nullptr,
+    .fallback = nullptr,
     .get_glyph_dsc = getGlyphDscSun24,
     .get_glyph_bitmap = getGlyphBitmapSun24,
     .line_height = 24,
@@ -476,11 +478,11 @@ const lv_font_t bluesquid_font_sun_24 = {
     .static_bitmap = 1,
     .underline_position = -2,
     .underline_thickness = 1,
-    .dsc = nullptr,
-    .fallback = nullptr,
 };
 
 const lv_font_t bluesquid_font_climate_24 = {
+    .dsc = nullptr,
+    .fallback = nullptr,
     .get_glyph_dsc = getGlyphDscClimate24,
     .get_glyph_bitmap = getGlyphBitmapClimate24,
     .line_height = 24,
@@ -489,6 +491,4 @@ const lv_font_t bluesquid_font_climate_24 = {
     .static_bitmap = 1,
     .underline_position = -2,
     .underline_thickness = 1,
-    .dsc = nullptr,
-    .fallback = nullptr,
 };

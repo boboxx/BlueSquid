@@ -7,11 +7,20 @@
 
 #include "AppConfig.h"
 #include "Logging.h"
+#include "VictronAlerts.h"
 
 namespace {
 constexpr char kTag[] = "CerboModbus";
 constexpr uint32_t kStaleMs = 5000;
 constexpr uint32_t kPollIntervalMs = 2000;
+constexpr uint32_t kAlertPollIntervalMs = 6000;
+// Battery monitor and solar charger unit IDs depend on the installation, so
+// the Controller probes each ID in small steps between energy polls.
+constexpr uint32_t kAlertScanBudgetMs = 600;
+constexpr uint32_t kAlertRescanMs = 10UL * 60UL * 1000UL;
+constexpr uint8_t kLastUnitId = 247;
+constexpr uint8_t kMaximumAlertUnits = 2;
+constexpr uint8_t kAlertFailureLimit = 3;
 constexpr uint16_t kModbusPort = 502;
 constexpr uint8_t kSystemUnitId = 100;
 constexpr uint8_t kDefaultVebusUnitId = 227;
@@ -43,6 +52,23 @@ struct BatteryManager::CerboPort {
   uint32_t lastPollMs = 0;
   uint32_t lastFrameMs = 0;
   BatteryStatus received{};
+
+  struct AlertGroup {
+    uint32_t warnings = 0;
+    uint32_t alarms = 0;
+    uint8_t code = 0;
+    uint8_t failures = 0;
+    bool available = false;
+  };
+  AlertGroup vebusAlerts, batteryAlerts, solarAlerts;
+  uint8_t batteryUnits[kMaximumAlertUnits]{};
+  uint8_t solarUnits[kMaximumAlertUnits]{};
+  uint8_t batteryUnitCount = 0;
+  uint8_t solarUnitCount = 0;
+  uint16_t nextScanUnit = 0;
+  bool scanComplete = false;
+  uint32_t scanCompletedMs = 0;
+  uint32_t lastAlertPollMs = 0;
 
   static int16_t signedRegister(const uint16_t* values, uint16_t address_) {
     return static_cast<int16_t>(values[address_ - kFirstRegister]);
@@ -144,9 +170,165 @@ struct BatteryManager::CerboPort {
     } else {
       next.inverterValid = false;
     }
+    updateAlerts(next, millis());
     received = next;
     lastFrameMs = millis();
     return true;
+  }
+
+  bool knownAlertUnit(uint8_t unit) const {
+    for (uint8_t index = 0; index < batteryUnitCount; ++index)
+      if (batteryUnits[index] == unit) return true;
+    for (uint8_t index = 0; index < solarUnitCount; ++index)
+      if (solarUnits[index] == unit) return true;
+    return false;
+  }
+
+  void restartAlertScan() {
+    scanComplete = false;
+    nextScanUnit = 0;
+  }
+
+  // Identifies battery monitors (register 259, battery voltage) and solar
+  // chargers (register 771, battery voltage). The Cerbo rejects registers
+  // outside a unit's service and unknown unit IDs, so each probe is quick.
+  void scanAlertUnits(uint32_t now) {
+    if (scanComplete) {
+      const bool allFound = batteryUnitCount == kMaximumAlertUnits &&
+                            solarUnitCount == kMaximumAlertUnits;
+      if (allFound || now - scanCompletedMs < kAlertRescanMs) return;
+      restartAlertScan();
+    }
+    const uint32_t started = millis();
+    while (!scanComplete && millis() - started < kAlertScanBudgetMs) {
+      const uint8_t unit = static_cast<uint8_t>(nextScanUnit++);
+      if (nextScanUnit > kLastUnitId) {
+        scanComplete = true;
+        scanCompletedMs = now;
+        LOG_INFO(kTag, "Alert device scan complete: %u battery monitor(s), "
+                 "%u solar charger(s)", batteryUnitCount, solarUnitCount);
+      }
+      if (unit == kSystemUnitId || unit == vebusUnitId || knownAlertUnit(unit))
+        continue;
+      uint16_t value = 0;
+      if (batteryUnitCount < kMaximumAlertUnits &&
+          readRegisterBlock(unit, 259, 1, &value, 259)) {
+        batteryUnits[batteryUnitCount++] = unit;
+        LOG_INFO(kTag, "Battery monitor found at unit ID %u", unit);
+      } else if (solarUnitCount < kMaximumAlertUnits &&
+                 readRegisterBlock(unit, 771, 1, &value, 771)) {
+        solarUnits[solarUnitCount++] = unit;
+        LOG_INFO(kTag, "Solar charger found at unit ID %u", unit);
+      }
+    }
+  }
+
+  // Keeps the last values through brief read failures; a group that keeps
+  // failing is cleared and, for discovered units, rediscovered.
+  bool recordAlertGroup(AlertGroup& group, bool success, uint32_t warnings,
+                        uint32_t alarms, uint8_t code) {
+    if (success) {
+      group.warnings = warnings;
+      group.alarms = alarms;
+      group.code = code;
+      group.failures = 0;
+      group.available = true;
+      return false;
+    }
+    if (!group.available) return false;
+    if (++group.failures < kAlertFailureLimit) return false;
+    group = AlertGroup();
+    return true;
+  }
+
+  void readVebusAlerts() {
+    uint16_t values[16];
+    for (uint16_t& value : values) value = 0xFFFF;
+    // 32 error code, 34-36 alarms; 42-47 sensor and L1 alarms.
+    const bool success = readRegisterBlock(vebusUnitId, 32, 5, values, 32);
+    if (success) readRegisterBlock(vebusUnitId, 42, 6, values, 32);
+    uint32_t warnings = 0, alarms = 0;
+    using namespace VictronAlerts;
+    applyRegister(warnings, alarms, kVebusHighTemperature, values[2]);
+    applyRegister(warnings, alarms, kVebusLowBattery, values[3]);
+    applyRegister(warnings, alarms, kVebusOverload, values[4]);
+    applyRegister(warnings, alarms, kVebusTemperatureSensor, values[10]);
+    applyRegister(warnings, alarms, kVebusVoltageSensor, values[11]);
+    applyRegister(warnings, alarms, kVebusRipple, values[15]);
+    recordAlertGroup(vebusAlerts, success, warnings, alarms,
+                     clampCode(values[0]));
+  }
+
+  void readBatteryAlerts() {
+    if (batteryUnitCount == 0) return;
+    uint32_t warnings = 0, alarms = 0;
+    bool success = false;
+    for (uint8_t index = 0; index < batteryUnitCount; ++index) {
+      const uint8_t unit = batteryUnits[index];
+      uint16_t values[12], extended[7];
+      for (uint16_t& value : values) value = 0xFFFF;
+      for (uint16_t& value : extended) value = 0xFFFF;
+      bool read = readRegisterBlock(unit, 268, 7, values, 268);
+      read |= readRegisterBlock(unit, 275, 5, values, 268);
+      read |= readRegisterBlock(unit, 320, 7, extended, 320);
+      uint16_t voltage = 0;
+      // A monitor without alarm registers still counts as reachable.
+      if (!read) read = readRegisterBlock(unit, 259, 1, &voltage, 259);
+      success |= read;
+      for (uint8_t offset = 0; offset < 12; ++offset)
+        VictronAlerts::applyRegister(
+            warnings, alarms, VictronAlerts::kBatteryLowVoltage + offset,
+            values[offset]);
+      for (uint8_t offset = 0; offset < 7; ++offset)
+        VictronAlerts::applyRegister(
+            warnings, alarms,
+            VictronAlerts::kBatteryHighChargeCurrent + offset,
+            extended[offset]);
+    }
+    if (recordAlertGroup(batteryAlerts, success, warnings, alarms, 0)) {
+      LOG_WARN(kTag, "Battery monitor alerts unavailable; rescanning");
+      batteryUnitCount = 0;
+      restartAlertScan();
+    }
+  }
+
+  void readSolarAlerts() {
+    if (solarUnitCount == 0) return;
+    uint8_t code = 0;
+    bool success = false;
+    for (uint8_t index = 0; index < solarUnitCount; ++index) {
+      uint16_t value = 0xFFFF;
+      bool read = readRegisterBlock(solarUnits[index], 788, 1, &value, 788);
+      if (!read) read = readRegisterBlock(solarUnits[index], 771, 1, &value, 771);
+      else if (code == 0) code = VictronAlerts::clampCode(value);
+      success |= read;
+    }
+    if (recordAlertGroup(solarAlerts, success, 0, 0, code)) {
+      LOG_WARN(kTag, "Solar charger alerts unavailable; rescanning");
+      solarUnitCount = 0;
+      restartAlertScan();
+    }
+  }
+
+  void updateAlerts(BatteryStatus& next, uint32_t now) {
+    scanAlertUnits(now);
+    if (lastAlertPollMs == 0 || now - lastAlertPollMs >= kAlertPollIntervalMs) {
+      lastAlertPollMs = now;
+      readVebusAlerts();
+      readBatteryAlerts();
+      readSolarAlerts();
+    }
+    next.alertWarnings =
+        vebusAlerts.warnings | batteryAlerts.warnings | solarAlerts.warnings;
+    next.alertAlarms =
+        vebusAlerts.alarms | batteryAlerts.alarms | solarAlerts.alarms;
+    next.vebusError = vebusAlerts.code;
+    next.solarError = solarAlerts.code;
+    next.alertSources =
+        (vebusAlerts.available ? VictronAlerts::kSourceVebus : 0) |
+        (batteryAlerts.available ? VictronAlerts::kSourceBattery : 0) |
+        (solarAlerts.available ? VictronAlerts::kSourceSolarCharger : 0);
+    next.alertsValid = true;
   }
 
   bool writeInverterMode(uint8_t mode) {
@@ -272,6 +454,9 @@ void BatteryManager::update() {
     next.shorePower = 0;
     next.shoreState = 255;
     next.solarChargerState = next.dcDcChargerState = 255;
+    // Keep the last alert values; the touchscreen ignores them until the
+    // Cerbo answers again instead of treating the outage as cleared alerts.
+    next.alertsValid = false;
   }
 #endif
   next.remainingAh = constrain(capacityAh_ + next.consumedAh, 0.0F, capacityAh_);

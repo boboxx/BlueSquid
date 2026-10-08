@@ -60,3 +60,20 @@ The Controller reported an encrypted, bonded, trusted connection and successful
 GATT responses from all three SP630E modules. This is a startup check, not a
 long-duration radio or complete visual/touch/SD/OTA validation. The 10.1-inch
 board was not connected and remains unflashed.
+
+## 7-inch Wi-Fi display follow-up (touchscreen 1.0.61)
+
+The user confirmed horizontal redraw artifacts start as soon as a client joins
+the system hotspot, before opening the web controls. The 7-inch RGB path uses
+PSRAM scanout and internal bounce buffers; competing PSRAM traffic is the
+suspected cause. Its pixel clock is reduced from 16 to 12 MHz and each bounce buffer
+increased from 10 to 20 scanlines. This uses 32 KB more internal RAM in total
+and reduces nominal panel refresh from about 39 to 29 Hz with the existing
+porches. Board pins, touch configuration and the P4 display path are preserved.
+
+The 7-inch upload was hash-verified. Its startup log confirms 1.0.61,
+12 MHz RGB clock, 16,000-pixel bounce buffers, successful LCD/LVGL and hotspot
+initialization, and BLE reconnection. Both touchscreen targets built
+successfully. On October 8, 2026, the user reported that the update appears to
+have resolved the artifacts after testing. Extended Wi-Fi/web-control stress
+testing has not been performed.

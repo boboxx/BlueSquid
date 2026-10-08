@@ -4794,6 +4794,10 @@ void setup() {
     Serial.println("Display configuration initialization failed");
     return;
   }
+  if (!configureTouchDisplay(panel)) {
+    Serial.println("Display timing configuration failed");
+    return;
+  }
   if (!panel->begin()) {
     Serial.println("Display hardware initialization failed");
     return;

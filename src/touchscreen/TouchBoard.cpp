@@ -68,3 +68,25 @@ esp_panel::board::Board* createTouchBoard() {
   return new esp_panel::board::Board();
 }
 #endif
+
+// Configure after Board::init() creates the driver's objects, before begin()
+// allocates the RGB buffers. Keep the default board constructor: the library's
+// runtime factory does not register every supported board's LCD controller.
+bool configureTouchDisplay(esp_panel::board::Board* board) {
+#if !BLUESQUID_TOUCHSCREEN_10IN
+  auto* lcd = board->getLCD();
+  if (!lcd || !lcd->getBus() ||
+      lcd->getBus()->getBasicAttributes().type != ESP_PANEL_BUS_TYPE_RGB) return false;
+  auto* rgb = static_cast<esp_panel::drivers::BusRGB*>(lcd->getBus());
+  constexpr uint32_t pixelClockHz = 12 * 1000 * 1000;
+  const uint32_t bouncePixels = lcd->getFrameWidth() * 20;
+  // Wi-Fi and LVGL share PSRAM bandwidth with scanout. Reduce demand and
+  // double the internal bounce buffers to tolerate short traffic bursts.
+  if (!rgb->configRGB_FreqHz(pixelClockHz) ||
+      !rgb->configRGB_BounceBufferSize(bouncePixels)) return false;
+  Serial.printf("RGB display: pixel clock %lu Hz, bounce buffer %lu pixels\n",
+                static_cast<unsigned long>(pixelClockHz),
+                static_cast<unsigned long>(bouncePixels));
+#endif
+  return true;
+}

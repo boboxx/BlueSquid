@@ -457,11 +457,11 @@ lv_obj_t* createColourWheel(lv_obj_t* parent, int width, int height, bool intera
       lv_canvas_set_px(canvas, x, y, lv_color_make(rgb.r,rgb.g,rgb.b), LV_OPA_COVER);
     }
   }
-  lv_obj_remove_flag(canvas, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(canvas, false);
   if (interactive) {
-    lv_obj_add_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(canvas, true);
   } else {
-    lv_obj_remove_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(canvas, false);
   }
   return canvas;
 }
@@ -470,8 +470,8 @@ lv_obj_t* createHueMarker(lv_obj_t* wheel, int size) {
   lv_obj_t* marker = lv_obj_create(wheel);
   lv_obj_remove_style_all(marker);
   lv_obj_set_size(marker, size, size);
-  lv_obj_remove_flag(marker, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_remove_flag(marker, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(marker, false);
+  lv_obj_set_clickable(marker, false);
   lv_obj_set_style_radius(marker, size / 2, 0);
   lv_obj_set_style_bg_color(marker, lv_color_hex(kColorBackground), 0);
   lv_obj_set_style_bg_opa(marker, LV_OPA_COVER, 0);
@@ -482,8 +482,8 @@ lv_obj_t* createHueMarker(lv_obj_t* wheel, int size) {
   lv_obj_remove_style_all(center);
   const int centerSize = size >= 18 ? 14 : 5;
   lv_obj_set_size(center, centerSize, centerSize);
-  lv_obj_remove_flag(center, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_remove_flag(center, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(center, false);
+  lv_obj_set_clickable(center, false);
   lv_obj_set_style_radius(center, centerSize / 2, 0);
   lv_obj_set_style_bg_opa(center, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(center, 0, 0);
@@ -610,7 +610,7 @@ void styleScreen() {
 }
 
 void stylePage(lv_obj_t* page) {
-  lv_obj_remove_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(page, false);
   lv_obj_set_style_bg_color(page, lv_color_hex(kColorBackground), 0);
   lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(page, 0, 0);
@@ -800,8 +800,8 @@ lv_obj_t* makeMoonButton(lv_obj_t* parent) {
   lv_obj_remove_style_all(button);
   lv_obj_set_pos(button, 762, 4);
   lv_obj_set_size(button, 32, 34);
-  lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_clickable(button, true);
+  lv_obj_set_scrollable(button, false);
   lv_obj_set_ext_click_area(button, 7);
 
   lv_obj_t* moon = lv_obj_create(button);
@@ -819,8 +819,8 @@ lv_obj_t* makeMoonButton(lv_obj_t* parent) {
   lv_obj_set_style_radius(cutout, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(cutout, lv_color_hex(kColorBackground), 0);
   lv_obj_set_style_bg_opa(cutout, LV_OPA_COVER, 0);
-  lv_obj_remove_flag(moon, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_remove_flag(cutout, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(moon, false);
+  lv_obj_set_clickable(cutout, false);
   lv_obj_add_event_cb(button, sleepNowClicked, LV_EVENT_CLICKED, nullptr);
   return button;
 }
@@ -851,7 +851,7 @@ void addHeader(lv_obj_t* page, const char* title, int connectionIndex) {
   lv_obj_t* homeIcon =
       makeLabel(page, LV_SYMBOL_HOME, 18, 15, &lv_font_montserrat_22,
                 kColorText);
-  lv_obj_add_flag(homeIcon, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(homeIcon, true);
   lv_obj_set_ext_click_area(homeIcon, 14);
   lv_obj_add_event_cb(homeIcon, headerHomeClicked, LV_EVENT_CLICKED, nullptr);
   makeLabel(page, title, 52, 12, &lv_font_montserrat_24, kColorText);
@@ -868,14 +868,13 @@ void addHeader(lv_obj_t* page, const char* title, int connectionIndex) {
   alertBellIcons[connectionIndex] =
       makeLabel(page, LV_SYMBOL_BELL, 684, 11, &lv_font_montserrat_22,
                 kColorMuted);
-  lv_obj_add_flag(alertBellIcons[connectionIndex], LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(alertBellIcons[connectionIndex], true);
   lv_obj_set_ext_click_area(alertBellIcons[connectionIndex], 8);
   lv_obj_add_event_cb(alertBellIcons[connectionIndex],
                       showVictronAlertsOnPower, LV_EVENT_CLICKED, nullptr);
   victronConnectionIcons[connectionIndex] =
       makeVictronConnectionIcon(page, 718, 6);
-  lv_obj_add_flag(victronConnectionIcons[connectionIndex],
-                  LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(victronConnectionIcons[connectionIndex], true);
   lv_obj_set_ext_click_area(victronConnectionIcons[connectionIndex], 10);
   lv_obj_add_event_cb(victronConnectionIcons[connectionIndex],
                       openConnectionStatus, LV_EVENT_CLICKED, nullptr);
@@ -925,7 +924,7 @@ lv_obj_t* makeCard(lv_obj_t* parent, int x, int y, int width, int height) {
   lv_obj_t* card = lv_obj_create(parent);
   lv_obj_set_pos(card, x, y);
   lv_obj_set_size(card, width, height);
-  lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(card, false);
   lv_obj_set_style_bg_color(card, lv_color_hex(kColorControlCard), 0);
   lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(card, 0, 0);
@@ -938,7 +937,7 @@ lv_obj_t* makeCard(lv_obj_t* parent, int x, int y, int width, int height) {
 void closeConnectionStatus(lv_event_t* event) {
   if (lv_event_get_code(event) == LV_EVENT_CLICKED &&
       connectionStatusOverlay != nullptr)
-    lv_obj_add_flag(connectionStatusOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(connectionStatusOverlay, true);
 }
 
 void refreshConnectionStatusCard() {
@@ -1000,7 +999,7 @@ void openConnectionStatus(lv_event_t* event) {
     connectionStatusOverlay = lv_obj_create(lv_screen_active());
     lv_obj_set_pos(connectionStatusOverlay, 0, 0);
     lv_obj_set_size(connectionStatusOverlay, 800, 416);
-    lv_obj_remove_flag(connectionStatusOverlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(connectionStatusOverlay, false);
     lv_obj_set_style_bg_color(connectionStatusOverlay, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(connectionStatusOverlay, LV_OPA_60, 0);
     lv_obj_set_style_border_width(connectionStatusOverlay, 0, 0);
@@ -1030,7 +1029,7 @@ void openConnectionStatus(lv_event_t* event) {
     lv_obj_center(closeLabel);
   }
   refreshConnectionStatusCard();
-  lv_obj_remove_flag(connectionStatusOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(connectionStatusOverlay, false);
   lv_obj_move_foreground(connectionStatusOverlay);
 }
 
@@ -1040,8 +1039,8 @@ lv_obj_t* makeIconCircle(lv_obj_t* parent, int x, int y, int size,
   lv_obj_t* circle = lv_obj_create(parent);
   lv_obj_set_pos(circle, x, y);
   lv_obj_set_size(circle, size, size);
-  lv_obj_remove_flag(circle, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_remove_flag(circle, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(circle, false);
+  lv_obj_set_clickable(circle, false);
   lv_obj_set_style_radius(circle, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(circle, lv_color_hex(kColorIconCircle), 0);
   lv_obj_set_style_bg_opa(circle, LV_OPA_COVER, 0);
@@ -1143,9 +1142,9 @@ uint8_t rememberedZoneOptions[4]{3,3,3,3};
 
 void setZoneBrightnessDisplay(uint8_t zone, uint8_t value) {
   lv_label_set_text_fmt(zoneBrightnessValues[zone], "%u%%", value);
-  if (value == 0) lv_obj_add_flag(zoneBrightnessFills[zone], LV_OBJ_FLAG_HIDDEN);
+  if (value == 0) lv_obj_set_hidden(zoneBrightnessFills[zone], true);
   else {
-    lv_obj_remove_flag(zoneBrightnessFills[zone], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(zoneBrightnessFills[zone], false);
     lv_obj_set_width(zoneBrightnessFills[zone],
         (value * kMainBrightnessTrackWidth + 99) / 100);
   }
@@ -1323,7 +1322,7 @@ void zoneToggleChanged(lv_event_t* event) {
 
 void closeColorDialog(lv_event_t* event) {
   if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
-    lv_obj_add_flag(colorDialogOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(colorDialogOverlay, true);
   }
 }
 
@@ -1372,8 +1371,8 @@ void syncWhiteSelections(uint8_t zone) {
   for (uint8_t i = 0; i < 3; ++i) {
     const bool shown = wired & bits[i];
     for (lv_obj_t* object : {switches[i], colorDialogChannelLabels[i]}) {
-      if (shown) lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
-      else lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+      if (shown) lv_obj_set_hidden(object, false);
+      else lv_obj_set_hidden(object, true);
     }
     if (shown) {
       lv_obj_set_pos(colorDialogChannelLabels[i], 16, 57 + row * 52);
@@ -1385,8 +1384,8 @@ void syncWhiteSelections(uint8_t zone) {
       lv_obj_add_state(switches[i], LV_STATE_CHECKED);
     else lv_obj_remove_state(switches[i], LV_STATE_CHECKED);
   }
-  if (wired & Sp630eChannels::kColour) lv_obj_remove_flag(colorDialogWheel, LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(colorDialogWheel, LV_OBJ_FLAG_HIDDEN);
+  if (wired & Sp630eChannels::kColour) lv_obj_set_hidden(colorDialogWheel, false);
+  else lv_obj_set_hidden(colorDialogWheel, true);
 }
 
 void openColorDialog(lv_event_t* event) {
@@ -1404,7 +1403,7 @@ void openColorDialog(lv_event_t* event) {
     lv_obj_remove_state(colorDialogEnableSwitch, LV_STATE_CHECKED);
   }
   syncWhiteSelections(activeColorZone);
-  lv_obj_remove_flag(colorDialogOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(colorDialogOverlay, false);
   lv_obj_move_foreground(colorDialogOverlay);
 }
 
@@ -1412,7 +1411,7 @@ void addLightZone(lv_obj_t* parent, const char* title, int x,
                   uint8_t zoneIndex) {
   lv_obj_t* card = lv_button_create(parent);
   zoneButtons[zoneIndex] = card;
-  lv_obj_add_flag(card, LV_OBJ_FLAG_CHECKABLE);
+  lv_obj_set_checkable(card, true);
   lv_obj_set_pos(card, x, 222);
   lv_obj_set_size(card, 360, 128);
   styleControlCard(card);
@@ -1451,8 +1450,8 @@ void addLightZone(lv_obj_t* parent, const char* title, int x,
   zoneColorCenters[zoneIndex] = lv_obj_create(colorButton);
   lv_obj_set_size(zoneColorCenters[zoneIndex], 26, 26);
   lv_obj_center(zoneColorCenters[zoneIndex]);
-  lv_obj_remove_flag(zoneColorCenters[zoneIndex], LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_remove_flag(zoneColorCenters[zoneIndex], LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(zoneColorCenters[zoneIndex], false);
+  lv_obj_set_clickable(zoneColorCenters[zoneIndex], false);
   lv_obj_set_style_radius(zoneColorCenters[zoneIndex], LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(zoneColorCenters[zoneIndex],
                             zoneColor(zoneIndex), 0);
@@ -1465,8 +1464,8 @@ void addLightZone(lv_obj_t* parent, const char* title, int x,
   lv_obj_set_pos(zoneBrightnessControls[zoneIndex], 14, 96);
   lv_obj_set_size(zoneBrightnessControls[zoneIndex],
                   kMainBrightnessTrackWidth, 14);
-  lv_obj_remove_flag(zoneBrightnessControls[zoneIndex], LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(zoneBrightnessControls[zoneIndex], LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(zoneBrightnessControls[zoneIndex], false);
+  lv_obj_set_clickable(zoneBrightnessControls[zoneIndex], true);
   lv_obj_set_ext_click_area(zoneBrightnessControls[zoneIndex], 10);
   lv_obj_set_style_radius(zoneBrightnessControls[zoneIndex], 7, 0);
   lv_obj_set_style_bg_color(zoneBrightnessControls[zoneIndex],
@@ -1478,8 +1477,8 @@ void addLightZone(lv_obj_t* parent, const char* title, int x,
   lv_obj_set_pos(zoneBrightnessFills[zoneIndex], 14, 96);
   lv_obj_set_size(zoneBrightnessFills[zoneIndex],
                   kMainBrightnessTrackWidth, 14);
-  lv_obj_remove_flag(zoneBrightnessFills[zoneIndex], LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_remove_flag(zoneBrightnessFills[zoneIndex], LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(zoneBrightnessFills[zoneIndex], false);
+  lv_obj_set_clickable(zoneBrightnessFills[zoneIndex], false);
   lv_obj_set_style_radius(zoneBrightnessFills[zoneIndex], 7, 0);
   lv_obj_set_style_bg_color(zoneBrightnessFills[zoneIndex],
                             lv_color_hex(kColorLightbulb), 0);
@@ -1502,7 +1501,7 @@ void createColorDialog() {
   colorDialogOverlay = lv_obj_create(lv_screen_active());
   lv_obj_set_pos(colorDialogOverlay, 0, 0);
   lv_obj_set_size(colorDialogOverlay, 800, 480);
-  lv_obj_remove_flag(colorDialogOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(colorDialogOverlay, false);
   lv_obj_set_style_bg_color(colorDialogOverlay, lv_color_black(), 0);
   lv_obj_set_style_bg_opa(colorDialogOverlay, LV_OPA_70, 0);
   lv_obj_set_style_border_width(colorDialogOverlay, 0, 0);
@@ -1553,7 +1552,7 @@ void createColorDialog() {
   colorDialogAvailabilityLabel =
       makeLabel(panel, "", 340, 78, &lv_font_montserrat_14, kColorAmber);
 
-  lv_obj_add_flag(colorDialogOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(colorDialogOverlay, true);
 }
 
 void toggleChanged(lv_event_t* event) {
@@ -1644,7 +1643,7 @@ lv_obj_t* addToggle(lv_obj_t* parent, const char* icon, const char* name,
                     lv_obj_t** stateLabel, lv_obj_t** titleLabel = nullptr,
                     lv_obj_t** iconLabel = nullptr) {
   lv_obj_t* button = lv_button_create(parent);
-  lv_obj_add_flag(button, LV_OBJ_FLAG_CHECKABLE);
+  lv_obj_set_checkable(button, true);
   lv_obj_set_pos(button, x, y);
   lv_obj_set_size(button, width, height);
   styleControlCard(button);
@@ -1693,19 +1692,19 @@ void applyDeviceDisplayLayout() {
   for (uint8_t zone = 0; zone < 4; ++zone) {
     if (zoneColorCenters[zone]) {
       auto* colour = lv_obj_get_parent(zoneColorCenters[zone]);
-      if (fullLightType(zone)) lv_obj_remove_flag(colour, LV_OBJ_FLAG_HIDDEN);
-      else lv_obj_add_flag(colour, LV_OBJ_FLAG_HIDDEN);
+      if (fullLightType(zone)) lv_obj_set_hidden(colour, false);
+      else lv_obj_set_hidden(colour, true);
     }
   }
   if (colorDialogOverlay && !fullLightType(activeColorZone))
-    lv_obj_add_flag(colorDialogOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(colorDialogOverlay, true);
   uint8_t lightRank = 0;
   for (uint8_t order = 0; order < 8; ++order) {
     for (uint8_t device = 0; device < 4; ++device) {
       if (!deviceVisible[device] || deviceOrder[device] != order) continue;
       lv_obj_t* card = zoneButtons[device];
       if (card != nullptr) {
-        lv_obj_remove_flag(card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(card, false);
         lv_obj_set_pos(card, lightRank % 2 == 0 ? 16 : 408,
                        lightRank < 2 ? 82 : 222);
         lv_obj_set_width(card, 376);
@@ -1716,7 +1715,7 @@ void applyDeviceDisplayLayout() {
   for (uint8_t device = 0; device < 4; ++device) {
     lv_obj_t* card = zoneButtons[device];
     if (card != nullptr && !deviceVisible[device])
-      lv_obj_add_flag(card, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(card, true);
   }
 
   uint8_t accessoryCount = 0;
@@ -1731,7 +1730,7 @@ void applyDeviceDisplayLayout() {
       const int width = accessoryCount == 0
           ? 0 : (768 - gap * (accessoryCount - 1)) / accessoryCount;
       if (controlButtons[accessory] != nullptr) {
-        lv_obj_remove_flag(controlButtons[accessory], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(controlButtons[accessory], false);
         lv_obj_set_pos(controlButtons[accessory], 16 + accessoryRank * (width + gap),
                        147);
         lv_obj_set_size(controlButtons[accessory], width, 120);
@@ -1744,7 +1743,7 @@ void applyDeviceDisplayLayout() {
   for (uint8_t accessory = 0; accessory < 4; ++accessory) {
     if (controlButtons[accessory] != nullptr &&
         !deviceVisible[accessory + 4])
-      lv_obj_add_flag(controlButtons[accessory], LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(controlButtons[accessory], true);
   }
 
   const uint8_t homeCount = 2 + accessoryCount;
@@ -1777,7 +1776,7 @@ void applyDeviceDisplayLayout() {
     for (uint8_t accessory = 0; accessory < 4; ++accessory) {
       const uint8_t device = accessory + 4;
       if (!deviceVisible[device] || deviceOrder[device] != order) continue;
-      lv_obj_remove_flag(favoriteButtons[accessory], LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(favoriteButtons[accessory], false);
       styleHomeQuickButton(favoriteButtons[accessory],
                            favoriteTitleLabels[accessory],
                            favoriteStateLabels[accessory],
@@ -1789,7 +1788,7 @@ void applyDeviceDisplayLayout() {
   for (uint8_t accessory = 0; accessory < 4; ++accessory) {
     if (favoriteButtons[accessory] != nullptr &&
         !deviceVisible[accessory + 4])
-      lv_obj_add_flag(favoriteButtons[accessory], LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(favoriteButtons[accessory], true);
   }
 }
 
@@ -1812,13 +1811,13 @@ void addMenuRow(lv_obj_t* panel, int y, const char* icon, const char* title,
 void closeOverlay(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   lv_obj_t* overlay = static_cast<lv_obj_t*>(lv_event_get_user_data(event));
-  if (overlay != nullptr) lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+  if (overlay != nullptr) lv_obj_set_hidden(overlay, true);
 }
 
 void dismissMenuPages() {
   // Include lazily created pages and every level of nested settings.
   for (auto* overlay : menuPageOverlays)
-    lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(overlay, true);
 }
 
 void tabNavigationChanged(lv_event_t* event) {
@@ -1839,7 +1838,7 @@ lv_obj_t* createPageOverlay(const char* title) {
   menuPageOverlays.push_back(overlay);
   lv_obj_set_pos(overlay, 0, 0);
   lv_obj_set_size(overlay, 800, 416);
-  lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(overlay, false);
   lv_obj_set_style_bg_color(overlay, lv_color_hex(kColorBackground), 0);
   lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(overlay, 0, 0);
@@ -1847,17 +1846,17 @@ lv_obj_t* createPageOverlay(const char* title) {
 
   lv_obj_t* back = makeLabel(overlay, LV_SYMBOL_LEFT, 18, 15,
                              &lv_font_montserrat_22, kColorText);
-  lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(back, true);
   lv_obj_set_ext_click_area(back, 14);
   lv_obj_add_event_cb(back, closeOverlay, LV_EVENT_CLICKED, overlay);
   makeLabel(overlay, title, 52, 12, &lv_font_montserrat_24, kColorText);
-  lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(overlay, true);
   return overlay;
 }
 
 void openSettings(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(settingsOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(settingsOverlay, false);
   lv_obj_move_foreground(settingsOverlay);
 }
 
@@ -2153,7 +2152,7 @@ void saveSp630eClicked(lv_event_t* event) {
 
 void openBluetoothControllers(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(bluetoothControllersOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(bluetoothControllersOverlay, false);
   lv_obj_move_foreground(bluetoothControllersOverlay);
   transportClient.requestSp630eConfiguration();
   scanSp630eClicked(event);
@@ -2166,7 +2165,7 @@ void addDeviceConfigurationIdentity(lv_obj_t* parent, uint8_t labelId,
       kDeviceIcons[deviceLabels[labelId].icon].symbol,
       &iconFont28, kColorCyan);
   deviceConfigIconLabels[labelId] = lv_obj_get_child(iconCircle, 0);
-  lv_obj_add_flag(iconCircle, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(iconCircle, true);
   lv_obj_add_event_cb(iconCircle, openDeviceLabelEditor, LV_EVENT_CLICKED,
       reinterpret_cast<void*>(static_cast<uintptr_t>(labelId)));
 
@@ -2175,7 +2174,7 @@ void addDeviceConfigurationIdentity(lv_obj_t* parent, uint8_t labelId,
                              &lv_font_montserrat_16, kColorText);
   lv_obj_set_width(name, nameWidth);
   deviceConfigNameLabels[labelId] = name;
-  lv_obj_add_flag(name, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(name, true);
   lv_obj_set_ext_click_area(name, 10);
   lv_obj_add_event_cb(name, openDeviceLabelEditor, LV_EVENT_CLICKED,
       reinterpret_cast<void*>(static_cast<uintptr_t>(labelId)));
@@ -2206,7 +2205,7 @@ void matchKeyboardCheckButtons() {
     auto* button = checkButtons[i];
     lv_obj_set_size(button, keyWidth, button == deviceSaveButton ? 40 : keyHeight);
     lv_obj_set_pos(button, 780 - keyWidth, button == deviceSaveButton ? 4 : 8);
-    lv_obj_add_flag(button, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_floating(button, true);
     lv_obj_move_foreground(button);
     lv_obj_set_style_radius(button, lv_obj_get_style_radius(keyboard, LV_PART_ITEMS), 0);
     lv_obj_set_style_bg_color(button, lv_color_hex(kColorCyan), 0);
@@ -2223,7 +2222,7 @@ void createBluetoothControllersOverlay() {
   lv_obj_remove_style_all(content);
   lv_obj_set_pos(content, 0, 50);
   lv_obj_set_size(content, 800, 366);
-  lv_obj_add_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(content, true);
   lv_obj_set_scroll_dir(content, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_AUTO);
   lv_obj_t* save = lv_button_create(bluetoothControllersOverlay);
@@ -2303,26 +2302,26 @@ void createBluetoothControllersOverlay() {
 
 void openCamperPosition(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(camperPositionOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(camperPositionOverlay, false);
   lv_obj_move_foreground(camperPositionOverlay);
 }
 
 void openDisplaySettings(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(displaySettingsOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(displaySettingsOverlay, false);
   lv_obj_move_foreground(displaySettingsOverlay);
 }
 
 void openSystemInfo(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(systemInfoOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(systemInfoOverlay, false);
   lv_obj_move_foreground(systemInfoOverlay);
 }
 
 void openLabelConfiguration(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   applyDeviceLabels();
-  lv_obj_remove_flag(labelConfigOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(labelConfigOverlay, false);
   lv_obj_move_foreground(labelConfigOverlay);
 }
 
@@ -2384,11 +2383,11 @@ void openDeviceLabelEditor(lv_event_t* event) {
       if (wired & kChannelSwitchBits[i]) lv_obj_add_state(labelEditorChannelSwitches[i], LV_STATE_CHECKED);
       else lv_obj_remove_state(labelEditorChannelSwitches[i], LV_STATE_CHECKED);
     }
-    lv_obj_remove_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(labelEditorChannelsRow, false);
     lv_obj_set_size(labelEditorKeyboard, 800, 208);
     lv_obj_align(labelEditorKeyboard, LV_ALIGN_TOP_LEFT, 0, 192);
   } else {
-    lv_obj_add_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(labelEditorChannelsRow, true);
     lv_obj_set_size(labelEditorKeyboard, 800, 258);
     lv_obj_align(labelEditorKeyboard, LV_ALIGN_TOP_LEFT, 0, 142);
   }
@@ -2405,15 +2404,15 @@ void openDeviceLabelEditor(lv_event_t* event) {
   lv_obj_t* layoutObjects[] = {labelEditorOrderLabel, labelEditorOrderDropdown};
   for (lv_obj_t* object : layoutObjects) {
     if (object == nullptr) continue;
-    if (configurable) lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+    if (configurable) lv_obj_set_hidden(object, false);
+    else lv_obj_set_hidden(object, true);
   }
   if (configurable) {
     const uint8_t device = editedDeviceLabel - 1;
     lv_dropdown_set_selected(labelEditorOrderDropdown,
         deviceVisible[device] ? deviceOrder[device] + 1 : 0);
   }
-  lv_obj_remove_flag(labelEditorOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(labelEditorOverlay, false);
   lv_obj_move_foreground(labelEditorOverlay);
   lv_obj_send_event(labelEditorTextArea, LV_EVENT_FOCUSED, nullptr);
 }
@@ -2437,7 +2436,7 @@ void refreshIconPicker() {
 void openIconPicker(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   refreshIconPicker();
-  lv_obj_remove_flag(iconPickerOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(iconPickerOverlay, false);
   lv_obj_move_foreground(iconPickerOverlay);
 }
 void selectDeviceIcon(lv_event_t* event) {
@@ -2465,7 +2464,7 @@ void saveIconSelection(lv_event_t* event) {
     uiPreferences.putUChar(key, editedDeviceColour);
   }
   applyDeviceLabels();
-  lv_obj_add_flag(iconPickerOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(iconPickerOverlay, true);
 }
 
 void saveDeviceLabel(lv_event_t* event) {
@@ -2514,14 +2513,14 @@ void saveDeviceLabel(lv_event_t* event) {
       uiPreferences.putUChar(orderKey, deviceOrder[index]);
     }
   }
-  if (!lv_obj_has_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN)) {
+  if (!lv_obj_is_hidden(labelEditorChannelsRow)) {
     const uint8_t zone = editedDeviceLabel - kLabelRgbwLight1;
     const uint8_t outputs = editedLightOutputs();
     if (outputs != lightCapabilities(zone) && !saveLightOutputs(zone, outputs))
       Serial.printf("Light %u outputs not saved: Controller offline\n", zone + 1);
   }
   applyDeviceLabels();
-  lv_obj_add_flag(labelEditorOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(labelEditorOverlay, true);
   Serial.printf("Device label %s: %s\n",
                 deviceLabels[editedDeviceLabel].channelName,
                 deviceLabels[editedDeviceLabel].value);
@@ -3155,7 +3154,7 @@ void refreshVictronAlerts(const TouchRemoteStatus& status, bool online) {
   }
 
   if (alertsOverlay != nullptr &&
-      !lv_obj_has_flag(alertsOverlay, LV_OBJ_FLAG_HIDDEN)) {
+      !lv_obj_is_hidden(alertsOverlay)) {
     String sources = "Monitoring: ";
     if (alerts.sources == 0) {
       sources += "no Victron devices reported yet";
@@ -3202,7 +3201,7 @@ void clearAlertsClicked(lv_event_t* event) {
 void openVictronAlerts(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || alertsOverlay == nullptr)
     return;
-  lv_obj_remove_flag(alertsOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(alertsOverlay, false);
   lv_obj_move_foreground(alertsOverlay);
   lv_obj_scroll_to_y(lv_obj_get_parent(alertsListLabel), 0, LV_ANIM_OFF);
 }
@@ -3248,7 +3247,7 @@ void createVictronAlertsOverlay() {
   lv_obj_set_width(alertsSummaryLabel, 764);
   lv_obj_t* listCard = makeCard(alertsOverlay, 16, 88, 768, 262);
   lv_obj_set_style_bg_color(listCard, lv_color_hex(kColorCard), 0);
-  lv_obj_add_flag(listCard, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(listCard, true);
   lv_obj_set_scroll_dir(listCard, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(listCard, LV_SCROLLBAR_MODE_AUTO);
   lv_obj_set_style_pad_all(listCard, 16, 0);
@@ -3271,8 +3270,8 @@ void addMenuHitTarget(lv_obj_t* panel, int y, lv_event_cb_t callback) {
   lv_obj_t* target = lv_obj_create(panel);
   lv_obj_set_pos(target, 0, y);
   lv_obj_set_size(target, 744, 67);
-  lv_obj_remove_flag(target, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(target, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(target, false);
+  lv_obj_set_clickable(target, true);
   lv_obj_set_style_bg_opa(target, LV_OPA_TRANSP, 0);
   lv_obj_set_style_bg_opa(target, LV_OPA_TRANSP, LV_STATE_PRESSED);
   lv_obj_set_style_border_width(target, 0, 0);
@@ -3327,7 +3326,7 @@ void saveCerboWifi(lv_event_t* event) {
 
 void openCerboWifi(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_obj_remove_flag(cerboWifiOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(cerboWifiOverlay, false);
   lv_obj_move_foreground(cerboWifiOverlay);
   transportClient.requestCerboWifiConfiguration();
 }
@@ -3388,7 +3387,7 @@ void createCerboWifiOverlay() {
   lv_keyboard_set_textarea(cerboWifiKeyboard, cerboWifiSsid);
   lv_obj_add_event_cb(cerboWifiKeyboard, saveCerboWifi, LV_EVENT_READY,
                       nullptr);
-  lv_obj_add_flag(cerboWifiOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(cerboWifiOverlay, true);
 }
 
 void hotspotFieldFocused(lv_event_t* event) {
@@ -3408,7 +3407,7 @@ void openHotspot(lv_event_t* event) {
   lv_textarea_set_text(hotspotSsid,status.ssid);
   lv_label_set_text_fmt(hotspotStatus, "%s - %s - %u phone(s)",
       status.active ? "Active" : "Unavailable", status.ip, status.clients);
-  lv_obj_remove_flag(hotspotOverlay,LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(hotspotOverlay, false);
   lv_obj_move_foreground(hotspotOverlay);
 }
 void createHotspotOverlay() {
@@ -3442,7 +3441,7 @@ void createHotspotOverlay() {
 // Walk visible UI objects so this applies to every keyboard, including new
 // settings pages. Overlay back buttons remain available with navigation hidden.
 void syncKeyboardNavigation(lv_obj_t* object, bool& visible) {
-  if (lv_obj_has_flag(object,LV_OBJ_FLAG_HIDDEN)) return;
+  if (lv_obj_is_hidden(object)) return;
   if (lv_obj_check_type(object,&lv_keyboard_class)) {
     visible=true;
     lv_obj_t* page=lv_obj_get_parent(object);
@@ -3467,7 +3466,7 @@ void openRvcFan(lv_event_t* event) {
   rvcConfigLoaded = false; rvcSaving = false;
   lv_label_set_text(rvcStatusLabel, "Loading Controller configuration...");
   if (!transportClient.requestRvcFanConfiguration()) lv_label_set_text(rvcStatusLabel, "Controller offline");
-  lv_obj_remove_flag(rvcOverlay, LV_OBJ_FLAG_HIDDEN); lv_obj_move_foreground(rvcOverlay);
+  lv_obj_set_hidden(rvcOverlay, false); lv_obj_move_foreground(rvcOverlay);
 }
 void createRvcFanOverlay() {
   rvcOverlay = createPageOverlay("RV-C");
@@ -3516,7 +3515,7 @@ void showFirmwareUpdate(lv_event_t*) {
       AppConfig::kFirmwareVersion, hotspot.ssid, hotspot.ip,
       FirmwareUpdate::available() ? "" :
       "Touchscreen OTA unavailable: install by USB first.");
-  lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(overlay, false);
   lv_obj_move_foreground(overlay);
 }
 
@@ -3627,18 +3626,18 @@ void openFactoryReset(lv_event_t*) {
     lv_obj_set_width(factoryResetStatus, 420);
   }
   lv_label_set_text(factoryResetStatus, "");
-  lv_obj_remove_flag(factoryResetOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(factoryResetOverlay, false);
   lv_obj_move_foreground(factoryResetOverlay);
 }
 
 void createSettingsOverlay() {
   settingsOverlay = createPageOverlay("System Configuration");
-  lv_obj_add_flag(settingsOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(settingsOverlay, true);
   lv_obj_set_scroll_dir(settingsOverlay, LV_DIR_VER);
   makeLabel(settingsOverlay, "Device configuration", 18, 52,
             &lv_font_montserrat_16, kColorText);
   lv_obj_t* bluetoothCard = makeCard(settingsOverlay, 16, 76, 768, 74);
-  lv_obj_add_flag(bluetoothCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(bluetoothCard, true);
   makeIconCircle(bluetoothCard, 16, 11, 52, LV_SYMBOL_BLUETOOTH,
                  &lv_font_montserrat_24, kColorCyan);
   makeLabel(bluetoothCard, "Bluetooth Module", 84, 13,
@@ -3651,7 +3650,7 @@ void createSettingsOverlay() {
                       LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t* wifiCard = makeCard(settingsOverlay, 16, 158, 768, 74);
-  lv_obj_add_flag(wifiCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(wifiCard, true);
   makeIconCircle(wifiCard, 16, 11, 52, LV_SYMBOL_WIFI,
                  &lv_font_montserrat_24, kColorGreen);
   makeLabel(wifiCard, "Victron Cerbo GX", 84, 13,
@@ -3663,7 +3662,7 @@ void createSettingsOverlay() {
   lv_obj_add_event_cb(wifiCard, openCerboWifi, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t* hotspotCard = makeCard(settingsOverlay, 16, 240, 768, 74);
-  lv_obj_add_flag(hotspotCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(hotspotCard, true);
   makeIconCircle(hotspotCard, 16, 11, 52, LV_SYMBOL_WIFI,
                  &lv_font_montserrat_24, kColorCyan);
   makeLabel(hotspotCard, "System hotspot", 84, 13, &lv_font_montserrat_18, kColorText);
@@ -3672,7 +3671,7 @@ void createSettingsOverlay() {
   lv_obj_add_event_cb(hotspotCard, openHotspot, LV_EVENT_CLICKED, nullptr);
 
   auto* rvcCard = makeCard(settingsOverlay, 16, 322, 768, 74);
-  lv_obj_add_flag(rvcCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(rvcCard, true);
   makeIconCircle(rvcCard, 16, 11, 52, BLUESQUID_SYMBOL_FAN, &iconFont28, kColorLightbulb);
   makeLabel(rvcCard, "RV-C", 84, 13, &lv_font_montserrat_18, kColorText);
   makeLabel(rvcCard, "Dometic FA75 vent fan", 84, 40, &lv_font_montserrat_12, kColorMuted);
@@ -3733,14 +3732,14 @@ void createSettingsOverlay() {
   lv_obj_set_width(backupDescription, 720);
 
   auto* updateCard = makeCard(settingsOverlay, 16, 618, 768, 74);
-  lv_obj_add_flag(updateCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(updateCard, true);
   makeLabel(updateCard, "Firmware updates", 20, 13, &lv_font_montserrat_18, kColorText);
   makeLabel(updateCard, "Install firmware from a browser over Wi-Fi", 20, 40,
             &lv_font_montserrat_12, kColorMuted);
   lv_obj_add_event_cb(updateCard, showFirmwareUpdate, LV_EVENT_CLICKED, nullptr);
 
   auto* pairingCard = makeCard(settingsOverlay, 16, 700, 768, 74);
-  lv_obj_add_flag(pairingCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(pairingCard, true);
   makeIconCircle(pairingCard, 16, 11, 52, LV_SYMBOL_BLUETOOTH,
                  &lv_font_montserrat_24, kColorCyan);
   makeLabel(pairingCard, "Pair another touchscreen", 84, 13,
@@ -3752,7 +3751,7 @@ void createSettingsOverlay() {
   lv_obj_add_event_cb(pairingCard, pairTouchscreenClicked, LV_EVENT_CLICKED, nullptr);
 
   auto* resetCard = makeCard(settingsOverlay, 16, 782, 768, 74);
-  lv_obj_add_flag(resetCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(resetCard, true);
   makeIconCircle(resetCard, 16, 11, 52, LV_SYMBOL_TRASH,
                  &lv_font_montserrat_24, kColorRed);
   makeLabel(resetCard, "Factory reset", 84, 13, &lv_font_montserrat_18, kColorText);
@@ -3803,7 +3802,7 @@ void createSettingsOverlay() {
   lv_obj_set_width(calibrationStatusLabel, 350);
 
   displaySettingsOverlay = createPageOverlay("Display");
-  lv_obj_add_flag(displaySettingsOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(displaySettingsOverlay, true);
   lv_obj_set_scroll_dir(displaySettingsOverlay, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(displaySettingsOverlay, LV_SCROLLBAR_MODE_AUTO);
   auto dropdown = [](lv_obj_t* parent, const char* options, int x, int y, int width,
@@ -3904,7 +3903,7 @@ void createSettingsOverlay() {
 
 void createLabelConfigurationOverlays() {
   labelConfigOverlay = createPageOverlay("Device assignments");
-  lv_obj_add_flag(labelConfigOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(labelConfigOverlay, true);
   lv_obj_set_scroll_dir(labelConfigOverlay, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(labelConfigOverlay, LV_SCROLLBAR_MODE_ACTIVE);
   makeLabel(labelConfigOverlay,
@@ -3916,7 +3915,7 @@ void createLabelConfigurationOverlays() {
     lv_obj_t* card = makeCard(labelConfigOverlay,
                               16 + column * 392, 77 + row * 78,
                               376, 68);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(card, true);
     lv_obj_t* iconCircle = makeIconCircle(
         card, 10, 10, 48, kDeviceIcons[deviceLabels[index].icon].symbol,
         &iconFont28, kColorCyan);
@@ -3938,7 +3937,7 @@ void createLabelConfigurationOverlays() {
   lv_obj_remove_style_all(bottomClearance);
   lv_obj_set_pos(bottomClearance, 0, 469);
   lv_obj_set_size(bottomClearance, 1, 28);
-  lv_obj_remove_flag(bottomClearance, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(bottomClearance, false);
 
   labelEditorOverlay = createPageOverlay("Edit device");
   labelEditorTitle = makeLabel(labelEditorOverlay, "Name", 22, 56,
@@ -4000,7 +3999,7 @@ void createLabelConfigurationOverlays() {
   lv_obj_remove_style_all(labelEditorChannelsRow);
   lv_obj_set_pos(labelEditorChannelsRow, 20, 146);
   lv_obj_set_size(labelEditorChannelsRow, 760, 40);
-  lv_obj_remove_flag(labelEditorChannelsRow, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(labelEditorChannelsRow, false);
   const char* outputNames[] = {"Colour (RGB)", "Warm white", "Cool white"};
   for (uint8_t i = 0; i < 3; ++i) {
     makeLabel(labelEditorChannelsRow, outputNames[i], i * 200, 10,
@@ -4018,7 +4017,7 @@ void createLabelConfigurationOverlays() {
       "Saving a change restarts\nthe Controller once", 600, 2,
       &lv_font_montserrat_12, kColorMuted);
   lv_obj_set_width(outputsNote, 160);
-  lv_obj_add_flag(labelEditorChannelsRow, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(labelEditorChannelsRow, true);
 
   labelEditorKeyboard = lv_keyboard_create(labelEditorOverlay);
   // lv_keyboard defaults to bottom alignment. Reset that alignment explicitly;
@@ -4029,7 +4028,7 @@ void createLabelConfigurationOverlays() {
   lv_keyboard_set_textarea(labelEditorKeyboard, labelEditorTextArea);
   lv_obj_add_event_cb(labelEditorKeyboard, saveDeviceLabel,
                       LV_EVENT_READY, nullptr);
-  lv_obj_add_flag(labelEditorOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(labelEditorOverlay, true);
 
   iconPickerOverlay = createPageOverlay("Icon & colour");
   iconPickerPreview = makeLabel(iconPickerOverlay, "", 78, 140, &iconFont28, kColorCyan);
@@ -4077,13 +4076,13 @@ void createLabelConfigurationOverlays() {
     lv_obj_add_event_cb(button, selectDeviceIcon, LV_EVENT_CLICKED,
         reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
   }
-  lv_obj_add_flag(iconPickerOverlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(iconPickerOverlay, true);
 }
 
 void createSystemInfoOverlay() {
   systemInfoOverlay = createPageOverlay("System information");
   lv_obj_t* card = makeCard(systemInfoOverlay, 16, 65, 768, 335);
-  lv_obj_add_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(card, true);
   lv_obj_set_scroll_dir(card, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_AUTO);
   lv_obj_set_style_pad_bottom(card, 16, 0);
@@ -4173,7 +4172,7 @@ void fanDirectionChanged(lv_event_t* event) {
 void createFanCard(lv_obj_t* parent) {
   fanButton = lv_button_create(parent);
   lv_obj_set_pos(fanButton, 16, 278); lv_obj_set_size(fanButton, 768, 122);
-  lv_obj_add_flag(fanButton, LV_OBJ_FLAG_CHECKABLE); styleControlCard(fanButton);
+  lv_obj_set_checkable(fanButton, true); styleControlCard(fanButton);
   lv_obj_set_style_pad_all(fanButton, 0, 0);
   makeIconCircle(fanButton, 14, 15, 46, BLUESQUID_SYMBOL_FAN, &iconFont28, kColorLightbulb);
   makeLabel(fanButton, "Vent fan", 72, 17, &lv_font_montserrat_16, kColorText);
@@ -4184,14 +4183,14 @@ void createFanCard(lv_obj_t* parent) {
   fanReverseSwitch = lv_switch_create(fanButton);
   lv_obj_set_pos(fanReverseSwitch, 515, 22); lv_obj_set_size(fanReverseSwitch, 52, 28);
   lv_obj_set_style_bg_color(fanReverseSwitch, lv_color_hex(kColorLightbulb), LV_PART_INDICATOR | LV_STATE_CHECKED);
-  lv_obj_remove_flag(fanReverseSwitch, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_obj_set_event_bubble(fanReverseSwitch, false);
   lv_obj_add_event_cb(fanReverseSwitch, fanDirectionChanged, LV_EVENT_VALUE_CHANGED, nullptr);
   fanSlider = lv_slider_create(fanButton);
   lv_obj_set_pos(fanSlider, 24, 94); lv_obj_set_size(fanSlider, 720, 12);
   lv_slider_set_range(fanSlider, 0, 10);
   lv_obj_set_style_bg_color(fanSlider, lv_color_hex(kColorLightbulb), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(fanSlider, lv_color_hex(kColorLightbulb), LV_PART_KNOB);
-  lv_obj_remove_flag(fanSlider, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_obj_set_event_bubble(fanSlider, false);
   lv_obj_add_event_cb(fanButton, fanToggled, LV_EVENT_VALUE_CHANGED, nullptr);
   lv_obj_add_event_cb(fanSlider, fanSpeedChanged, LV_EVENT_VALUE_CHANGED, nullptr);
   lv_obj_add_event_cb(fanSlider, fanSpeedChanged, LV_EVENT_RELEASED, nullptr);
@@ -4255,7 +4254,7 @@ void buildUi() {
   // Slider drags are horizontal, just like the tab view's swipe gesture. Keep
   // page changes on the navigation bar so a lighting adjustment cannot
   // accidentally switch tabs.
-  lv_obj_remove_flag(lv_tabview_get_content(tabs), LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(lv_tabview_get_content(tabs), false);
 
   lv_obj_t* tabButtons = lv_tabview_get_tab_bar(tabs);
   lv_obj_set_style_bg_color(tabButtons, lv_color_hex(kColorSurface), 0);
@@ -4321,7 +4320,7 @@ void buildUi() {
   powerAlertsLabel = addDetailCard(power, 528, 196, 256, 187, LV_SYMBOL_BELL,
                                    "Victron alerts", kColorAmber);
   lv_obj_t* alertsCard = lv_obj_get_parent(powerAlertsLabel);
-  lv_obj_add_flag(alertsCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(alertsCard, true);
   lv_obj_add_event_cb(alertsCard, openVictronAlerts, LV_EVENT_CLICKED,
                       nullptr);
   makeLabel(alertsCard, LV_SYMBOL_RIGHT, 226, 24, &lv_font_montserrat_16,
@@ -4373,7 +4372,7 @@ void buildUi() {
 
   addHeader(menu, "Settings", 4);
   lv_obj_t* menuPanel = makeCard(menu, 16, 61, 768, 343);
-  lv_obj_add_flag(menuPanel, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(menuPanel, true);
   lv_obj_set_scroll_dir(menuPanel, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(menuPanel, LV_SCROLLBAR_MODE_ON);
   lv_obj_set_style_width(menuPanel, 5, LV_PART_SCROLLBAR);
@@ -4416,15 +4415,15 @@ void refreshUi() {
   bool keyboardVisible=false;
   syncKeyboardNavigation(lv_screen_active(),keyboardVisible);
   lv_obj_t* bar=lv_tabview_get_tab_bar(tabView);
-  if (keyboardVisible) lv_obj_add_flag(bar,LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_remove_flag(bar,LV_OBJ_FLAG_HIDDEN);
+  if (keyboardVisible) lv_obj_set_hidden(bar, true);
+  else lv_obj_set_hidden(bar, false);
   processSp630ePayload();
   const bool online = transportClient.connected();
   const bool cerboConnected = online && status.energyValid;
   for (lv_obj_t* icon : victronConnectionIcons)
     setVictronConnectionIcon(icon, online, cerboConnected);
   if (connectionStatusOverlay != nullptr &&
-      !lv_obj_has_flag(connectionStatusOverlay, LV_OBJ_FLAG_HIDDEN))
+      !lv_obj_is_hidden(connectionStatusOverlay))
     refreshConnectionStatusCard();
   const bool inverterControlsAvailable =
       cerboConnected && status.inverterValid;
@@ -4584,7 +4583,7 @@ void refreshUi() {
       selectedRgb[zone][2] = normalized[2];
       if (changed) {
         lv_obj_set_style_bg_color(zoneColorCenters[zone], zoneColor(zone), 0);
-        if (!lv_obj_has_flag(colorDialogOverlay, LV_OBJ_FLAG_HIDDEN) &&
+        if (!lv_obj_is_hidden(colorDialogOverlay) &&
             activeColorZone == zone) {
           positionHueMarkerForZone(colorDialogMarker, colorDialogWheel,
                                    zone, 24);
@@ -4595,7 +4594,7 @@ void refreshUi() {
     if (!lv_obj_has_state(zoneBrightnessControls[zone], LV_STATE_PRESSED))
       setZoneBrightnessDisplay(zone, zoneOutputEnabled[zone] ? desiredBrightness[zone] : 0);
 
-    if (!lv_obj_has_flag(colorDialogOverlay, LV_OBJ_FLAG_HIDDEN) &&
+    if (!lv_obj_is_hidden(colorDialogOverlay) &&
         activeColorZone == zone) {
       if (desiredColorEnabled[zone]) {
         lv_obj_add_state(colorDialogEnableSwitch, LV_STATE_CHECKED);
@@ -4830,8 +4829,8 @@ void setup() {
   displayDimmer = lv_obj_create(lv_layer_top());
   lv_obj_remove_style_all(displayDimmer);
   lv_obj_set_size(displayDimmer, 800, 480);
-  lv_obj_remove_flag(displayDimmer, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_remove_flag(displayDimmer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_clickable(displayDimmer, false);
+  lv_obj_set_scrollable(displayDimmer, false);
   lv_obj_set_style_bg_color(displayDimmer, lv_color_black(), 0);
   applyDisplayBrightness();
   lvgl_port_unlock();

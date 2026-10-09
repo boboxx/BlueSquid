@@ -79,12 +79,20 @@ bool configureTouchDisplay(esp_panel::board::Board* board) {
       lcd->getBus()->getBasicAttributes().type != ESP_PANEL_BUS_TYPE_RGB) return false;
   auto* rgb = static_cast<esp_panel::drivers::BusRGB*>(lcd->getBus());
   constexpr uint32_t pixelClockHz = 12 * 1000 * 1000;
-  const uint32_t bouncePixels = lcd->getFrameWidth() * 20;
-  // Wi-Fi and LVGL share PSRAM bandwidth with scanout. Reduce demand and
-  // double the internal bounce buffers to tolerate short traffic bursts.
-  if (!rgb->configRGB_FreqHz(pixelClockHz) ||
-      !rgb->configRGB_BounceBufferSize(bouncePixels)) return false;
-  Serial.printf("RGB display: pixel clock %lu Hz, bounce buffer %lu pixels\n",
+  constexpr uint32_t bouncePixels = 0;
+  // Use direct PSRAM DMA instead of CPU-refilled bounce buffers. A delayed
+  // refill during radio activity can shift the RGB stream. Keep the reduced
+  // pixel clock to limit PSRAM bandwidth demand; validate under Wi-Fi load.
+  if (!rgb->configRGB_FreqHz(pixelClockHz)) return false;
+  // DisplayPanel 1.0.4's size setter divides by the requested size, so zero
+  // must be set directly before begin(). The frequency setter above converts
+  // the refresh configuration to its full form. The underlying bus is mutable.
+  auto& config = const_cast<esp_panel::drivers::BusRGB::Config&>(rgb->getConfig());
+  auto* refresh = std::get_if<esp_panel::drivers::BusRGB::RefreshPanelFullConfig>(
+      &config.refresh_panel);
+  if (!refresh) return false;
+  refresh->bounce_buffer_size_px = bouncePixels;
+  Serial.printf("RGB display: direct PSRAM DMA, pixel clock %lu Hz, bounce buffer %lu pixels\n",
                 static_cast<unsigned long>(pixelClockHz),
                 static_cast<unsigned long>(bouncePixels));
 #endif

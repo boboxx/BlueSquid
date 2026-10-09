@@ -14,7 +14,9 @@ constexpr char kCommandUuid[] = "7D8B2002-8A75-4E41-9A6A-35D0A7A18B01";
 constexpr char kAckUuid[] = "7D8B2003-8A75-4E41-9A6A-35D0A7A18B01";
 
 constexpr uint8_t kProtocolVersion = 1;
-constexpr size_t kSnapshotSize = 111;
+constexpr size_t kSnapshotSize = 115;
+// Snapshot size before the Cerbo time was appended; still accepted.
+constexpr size_t kSnapshotLegacySize = 111;
 constexpr size_t kMaximumCommandPayload = 12;
 constexpr size_t kCommandHeaderSize = 6;
 constexpr size_t kAckSize = 10;
@@ -66,6 +68,7 @@ enum SnapshotOffset : size_t {
   kSnapshotFanSource = 108,
   kSnapshotFanInstance = 109,
   kSnapshotFanError = 110,
+  kSnapshotCerboTime = 111,  // UTC seconds from the Cerbo clock; 0 = unknown
   kSnapshotExtraRgbw = 88, // two 9-byte RGBW output/preset records
 };
 

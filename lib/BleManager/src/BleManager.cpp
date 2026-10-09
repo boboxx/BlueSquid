@@ -786,6 +786,8 @@ void BleManager::publishTouchSnapshot(const SystemStatus& status,
                          scaledUnsigned(status.battery.dcDcEnergyWh, 1.0F));
   BlueSquidBle::writeU16(packet + BlueSquidBle::kSnapshotEnergyTotals + 4,
                          scaledUnsigned(status.battery.loadEnergyWh, 1.0F));
+  BlueSquidBle::writeU32(packet + BlueSquidBle::kSnapshotCerboTime,
+                         batteryManager_.cerboTime());
   touchSnapshotCharacteristic_->setValue(packet, sizeof(packet));
   if (notify) touchSnapshotCharacteristic_->notify(packet, sizeof(packet));
   publishTouchAlerts(status.battery, notify);

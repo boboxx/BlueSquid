@@ -8,10 +8,6 @@
 
 namespace {
 constexpr char kTag[] = "Sensors";
-
-#ifndef BLUESQUID_SIMULATED_SENSORS
-#define BLUESQUID_SIMULATED_SENSORS BLUESQUID_SIMULATED_HARDWARE
-#endif
 }
 
 SensorManager::SensorManager(EventManager& eventManager,
@@ -20,10 +16,6 @@ SensorManager::SensorManager(EventManager& eventManager,
 
 bool SensorManager::begin() {
   startupMs_ = millis();
-#if BLUESQUID_SIMULATED_SENSORS
-  status_.valid = true;
-  LOG_INFO(kTag, "Using simulated sensor data");
-#else
   settingsManager_.loadLevelCalibration(pitchZeroDegrees_, rollZeroDegrees_);
   LOG_INFO(kTag, "Level calibration: pitch %.1f, roll %.1f",
            pitchZeroDegrees_, rollZeroDegrees_);
@@ -45,26 +37,12 @@ bool SensorManager::begin() {
            AppConfig::Sensors::kGy61ZPin);
 
   status_.valid = htu21dReady_;
-#endif
   return true;
 }
 
 void SensorManager::update() {
   const uint32_t now = millis();
 
-#if BLUESQUID_SIMULATED_SENSORS
-  if (now - lastAttitudeSampleMs_ >=
-      AppConfig::Sensors::kAttitudeSampleIntervalMs) {
-    lastAttitudeSampleMs_ = now;
-    const float seconds = now / 1000.0F;
-    status_.pitchDegrees = 1.2F;
-    status_.rollDegrees = -0.6F;
-    status_.cabinTemperatureC = 21.5F + 0.4F * sinf(seconds / 30.0F);
-    status_.fridgeTemperatureC = 3.4F;
-    status_.cabinHumidityPercent = 45.0F;
-    eventManager_.publish({EventType::StatusChanged, now});
-  }
-#else
   if (now - lastClimateSampleMs_ >=
       AppConfig::Sensors::kClimateSampleIntervalMs) {
     lastClimateSampleMs_ = now;
@@ -80,7 +58,6 @@ void SensorManager::update() {
     readAttitude();
     eventManager_.publish({EventType::StatusChanged, now});
   }
-#endif
 }
 
 const SensorStatus& SensorManager::status() const {

@@ -24,6 +24,8 @@ class BatteryManager {
   bool setChargerEnabled(bool enabled);
   uint8_t vebusUnitId() const { return vebusUnitId_; }
   bool setVebusUnitId(uint8_t unitId);
+  // Cerbo clock as UTC seconds, advanced since it was read; 0 if unknown.
+  uint32_t cerboTime() const;
 
  private:
   struct CerboPort;
@@ -39,6 +41,8 @@ class BatteryManager {
   bool statusChanged_ = false;
   uint32_t lastEnergyMs_ = 0;
   float capacityAh_ = 0.0F;
+  uint32_t cerboTime_ = 0;
+  uint32_t cerboTimeMs_ = 0;
   TaskHandle_t taskHandle_ = nullptr;
   int8_t pendingInverterMode_ = -1;
   InverterModeRequest modeRequest_;

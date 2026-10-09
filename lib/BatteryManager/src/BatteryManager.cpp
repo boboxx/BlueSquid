@@ -14,6 +14,9 @@ constexpr char kTag[] = "CerboModbus";
 constexpr uint32_t kStaleMs = 5000;
 constexpr uint32_t kPollIntervalMs = 2000;
 constexpr uint32_t kAlertPollIntervalMs = 6000;
+constexpr uint32_t kTimePollIntervalMs = 60000;
+// A clock reading older than this is no longer reported.
+constexpr uint32_t kTimeValidMs = 10UL * 60UL * 1000UL;
 // Battery monitor and solar charger unit IDs depend on the installation, so
 // the Controller probes each ID in small steps between energy polls.
 constexpr uint32_t kAlertScanBudgetMs = 600;
@@ -68,7 +71,15 @@ struct BatteryManager::CerboPort {
   uint16_t nextScanUnit = 0;
   bool scanComplete = false;
   uint32_t scanCompletedMs = 0;
+  // Capacity configured in the battery monitor; 0 until one reports it.
+  float monitorCapacityAh = 0.0F;
+  // Solar charger register 775 (/State); 255 until a charger reports it.
+  uint8_t solarState = 255;
   uint32_t lastAlertPollMs = 0;
+  // System register 830 (/Timestamp): UTC seconds as a 64-bit value.
+  uint32_t time = 0;
+  uint32_t timeMs = 0;
+  uint32_t lastTimePollMs = 0;
 
   static int16_t signedRegister(const uint16_t* values, uint16_t address_) {
     return static_cast<int16_t>(values[address_ - kFirstRegister]);
@@ -160,8 +171,8 @@ struct BatteryManager::CerboPort {
     next.valid = true;
     next.solarValid = values[10] != 0xFFFF;
     next.dcDcValid = values[15] != 0xFFFF;
-    next.solarChargerState = next.solarValid && next.solarPower > 0 ? 3 : 0;
-    next.dcDcChargerState = next.dcDcValid && next.dcDcPower > 0 ? 3 : 0;
+    // No DC/DC charger state is read from the Cerbo; report it as unknown.
+    next.dcDcChargerState = 255;
     uint16_t inverterMode = 0xFFFF;
     if (readRegisterBlock(vebusUnitId, 33, 1, &inverterMode, 33) &&
         inverterMode >= 1 && inverterMode <= 4) {
@@ -171,9 +182,26 @@ struct BatteryManager::CerboPort {
       next.inverterValid = false;
     }
     updateAlerts(next, millis());
+    readTime();
     received = next;
     lastFrameMs = millis();
     return true;
+  }
+
+  void readTime() {
+    const uint32_t now = millis();
+    if (lastTimePollMs != 0 && now - lastTimePollMs < kTimePollIntervalMs)
+      return;
+    lastTimePollMs = now;
+    uint16_t words[4]{};
+    if (!readRegisterBlock(kSystemUnitId, 830, 4, words, 830)) return;
+    const uint64_t seconds = (static_cast<uint64_t>(words[0]) << 48) |
+                             (static_cast<uint64_t>(words[1]) << 32) |
+                             (static_cast<uint64_t>(words[2]) << 16) | words[3];
+    // Reject an unset clock (before 2024) or a value beyond 32 bits.
+    if (seconds < 1704067200ULL || seconds > UINT32_MAX) return;
+    time = static_cast<uint32_t>(seconds);
+    timeMs = millis();
   }
 
   bool knownAlertUnit(uint8_t unit) const {
@@ -263,6 +291,7 @@ struct BatteryManager::CerboPort {
     if (batteryUnitCount == 0) return;
     uint32_t warnings = 0, alarms = 0;
     bool success = false;
+    float capacityAh = 0.0F;
     for (uint8_t index = 0; index < batteryUnitCount; ++index) {
       const uint8_t unit = batteryUnits[index];
       uint16_t values[12], extended[7];
@@ -275,6 +304,11 @@ struct BatteryManager::CerboPort {
       // A monitor without alarm registers still counts as reachable.
       if (!read) read = readRegisterBlock(unit, 259, 1, &voltage, 259);
       success |= read;
+      // Register 309 is /Capacity: the monitor's battery capacity, 0.1 Ah.
+      uint16_t capacity = 0xFFFF;
+      if (capacityAh == 0.0F && readRegisterBlock(unit, 309, 1, &capacity, 309) &&
+          capacity >= 100 && capacity <= 20000)
+        capacityAh = capacity / 10.0F;
       for (uint8_t offset = 0; offset < 12; ++offset)
         VictronAlerts::applyRegister(
             warnings, alarms, VictronAlerts::kBatteryLowVoltage + offset,
@@ -285,9 +319,11 @@ struct BatteryManager::CerboPort {
             VictronAlerts::kBatteryHighChargeCurrent + offset,
             extended[offset]);
     }
+    if (capacityAh != 0.0F) monitorCapacityAh = capacityAh;
     if (recordAlertGroup(batteryAlerts, success, warnings, alarms, 0)) {
       LOG_WARN(kTag, "Battery monitor alerts unavailable; rescanning");
       batteryUnitCount = 0;
+      monitorCapacityAh = 0.0F;
       restartAlertScan();
     }
   }
@@ -295,6 +331,7 @@ struct BatteryManager::CerboPort {
   void readSolarAlerts() {
     if (solarUnitCount == 0) return;
     uint8_t code = 0;
+    uint8_t state = 255;
     bool success = false;
     for (uint8_t index = 0; index < solarUnitCount; ++index) {
       uint16_t value = 0xFFFF;
@@ -302,10 +339,17 @@ struct BatteryManager::CerboPort {
       if (!read) read = readRegisterBlock(solarUnits[index], 771, 1, &value, 771);
       else if (code == 0) code = VictronAlerts::clampCode(value);
       success |= read;
+      uint16_t chargeState = 0xFFFF;
+      if (state == 255 &&
+          readRegisterBlock(solarUnits[index], 775, 1, &chargeState, 775) &&
+          chargeState < 255)
+        state = static_cast<uint8_t>(chargeState);
     }
+    if (success) solarState = state;
     if (recordAlertGroup(solarAlerts, success, 0, 0, code)) {
       LOG_WARN(kTag, "Solar charger alerts unavailable; rescanning");
       solarUnitCount = 0;
+      solarState = 255;
       restartAlertScan();
     }
   }
@@ -324,6 +368,7 @@ struct BatteryManager::CerboPort {
         vebusAlerts.alarms | batteryAlerts.alarms | solarAlerts.alarms;
     next.vebusError = vebusAlerts.code;
     next.solarError = solarAlerts.code;
+    next.solarChargerState = solarState;
     next.alertSources =
         (vebusAlerts.available ? VictronAlerts::kSourceVebus : 0) |
         (batteryAlerts.available ? VictronAlerts::kSourceBattery : 0) |
@@ -382,14 +427,10 @@ bool BatteryManager::begin() {
   vebusUnitId_ = settingsManager_.loadCerboVebusUnitId(kDefaultVebusUnitId);
   if (vebusUnitId_ == 0 || vebusUnitId_ > 247)
     vebusUnitId_ = kDefaultVebusUnitId;
-#if BLUESQUID_SIMULATED_BATTERY
-  LOG_INFO(kTag, "Using simulated Cerbo energy data");
-#else
   cerbo_ = new CerboPort(vebusUnitId_);
   LOG_INFO(kTag,
            "Cerbo Modbus TCP monitoring enabled (system ID 100, VE.Bus ID %u)",
            vebusUnitId_);
-#endif
   return true;
 }
 
@@ -418,13 +459,7 @@ void BatteryManager::taskLoop() {
 void BatteryManager::update() {
   BatteryStatus next = status();
   const uint32_t now = millis();
-#if BLUESQUID_SIMULATED_BATTERY
-  next.voltage = 13.2F; next.current = 8.4F; next.power = 110.9F;
-  next.stateOfCharge = 76.0F; next.solarPower = 185.0F; next.dcDcPower = 110.0F;
-  next.consumedAh = -216.0F; next.timeToGoMinutes = 1080.0F;
-  next.shuntValid = next.solarValid = next.dcDcValid = next.valid = true;
-  next.solarChargerState = 3; next.dcDcChargerState = 5;
-#else
+  float capacityAh = capacityAh_;
   portENTER_CRITICAL(&statusMux_);
   const int8_t requestedMode = pendingInverterMode_;
   pendingInverterMode_ = -1;
@@ -448,6 +483,12 @@ void BatteryManager::update() {
     next.solarEnergyWh = solarEnergy;
     next.dcDcEnergyWh = dcDcEnergy;
     next.loadEnergyWh = loadEnergy;
+    portENTER_CRITICAL(&statusMux_);
+    cerboTime_ = cerbo_->time;
+    cerboTimeMs_ = cerbo_->timeMs;
+    portEXIT_CRITICAL(&statusMux_);
+    // Prefer the capacity set in the battery monitor over the local setting.
+    if (cerbo_->monitorCapacityAh > 0.0F) capacityAh = cerbo_->monitorCapacityAh;
   } else {
     next.shuntValid = next.solarValid = next.dcDcValid = next.valid = false;
     next.shoreValid = false;
@@ -458,8 +499,7 @@ void BatteryManager::update() {
     // Cerbo answers again instead of treating the outage as cleared alerts.
     next.alertsValid = false;
   }
-#endif
-  next.remainingAh = constrain(capacityAh_ + next.consumedAh, 0.0F, capacityAh_);
+  next.remainingAh = constrain(capacityAh + next.consumedAh, 0.0F, capacityAh);
   if (!next.valid)
     next.loadPower = max(0.0F, next.solarPower + next.dcDcPower - next.power);
   updateEnergyTotals(next, now);
@@ -491,6 +531,15 @@ void BatteryManager::commitStatus(const BatteryStatus& status) {
   if (different(status_, status)) { status_ = status; statusChanged_ = true; }
   modeRequest_.observe(status.inverterMode, status.inverterValid);
   portEXIT_CRITICAL(&statusMux_);
+}
+
+uint32_t BatteryManager::cerboTime() const {
+  portENTER_CRITICAL(&statusMux_);
+  const uint32_t time = cerboTime_, timeMs = cerboTimeMs_;
+  portEXIT_CRITICAL(&statusMux_);
+  const uint32_t age = millis() - timeMs;
+  if (time == 0 || age > kTimeValidMs) return 0;
+  return time + age / 1000U;
 }
 
 float BatteryManager::capacityAh() const {

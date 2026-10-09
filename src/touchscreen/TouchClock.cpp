@@ -61,6 +61,13 @@ bool sync(int64_t epoch) {
   portENTER_CRITICAL(&mux); base = epoch - seconds(); valid = dated = true; portEXIT_CRITICAL(&mux);
   return true;
 }
+uint32_t utc() {
+  portENTER_CRITICAL(&mux);
+  const bool calendar = valid && dated;
+  const int64_t value = base + seconds();
+  portEXIT_CRITICAL(&mux);
+  return calendar ? uint32_t(value) : 0;
+}
 bool setTime(unsigned hour, unsigned minute) {
   if (hour > 23 || minute > 59) return false;
   portENTER_CRITICAL(&mux);

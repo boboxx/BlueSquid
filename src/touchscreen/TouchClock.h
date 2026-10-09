@@ -9,6 +9,8 @@ Reading read();
 // time without a date, or an empty string when the clock is not set.
 void timestamp(char* out, size_t size);
 bool sync(int64_t epoch);
+// UTC seconds when the clock has a date, otherwise 0.
+uint32_t utc();
 bool setTime(unsigned hour, unsigned minute);
 void setZone(unsigned zone);
 unsigned zone();

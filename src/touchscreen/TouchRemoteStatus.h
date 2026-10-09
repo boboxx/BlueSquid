@@ -52,6 +52,9 @@ struct TouchRemoteStatus {
   uint8_t rearFirmwareMinor = 0;
   uint8_t rearFirmwarePatch = 0;
   uint32_t rearUptimeSeconds = 0;
+  // Cerbo UTC clock from the latest snapshot (0 = unknown), received at
+  // lastHeartbeatMs.
+  uint32_t cerboTime = 0;
   uint32_t lastHeartbeatMs = 0;
   // Victron alerts from the optional alert characteristic; invalid when the
   // Controller predates it or has no current Cerbo data.

@@ -46,6 +46,5 @@ Saved device settings override build defaults. See [network configuration](netwo
 Hardware pin constants are in `include/AppConfig.h`; active overrides are in
 `platformio.ini`.
 
-The simulated hardware, sensor and battery options remain available for testing.
-The current build selects real sensor and battery paths. Calibrate vehicle level
+Calibrate vehicle level
 through the touchscreen after installing the GY-61.

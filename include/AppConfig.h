@@ -4,24 +4,20 @@
 
 #include "SystemTypes.h"
 
-#ifndef BLUESQUID_SIMULATED_HARDWARE
-#define BLUESQUID_SIMULATED_HARDWARE 0
-#endif
-
 namespace AppConfig {
 
 constexpr char kProductName[] = "BlueSquid Camper Control";
 // Independent device releases. The build selects the version for this target.
 #if defined(BLUESQUID_TOUCHSCREEN_FIRMWARE) && BLUESQUID_TOUCHSCREEN_FIRMWARE
-constexpr char kFirmwareVersion[] = "1.0.62";
+constexpr char kFirmwareVersion[] = "1.0.64";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 62;
+constexpr uint8_t kFirmwareVersionPatch = 64;
 #else
-constexpr char kFirmwareVersion[] = "1.0.40";
+constexpr char kFirmwareVersion[] = "1.0.44";
 constexpr uint8_t kFirmwareVersionMajor = 1;
 constexpr uint8_t kFirmwareVersionMinor = 0;
-constexpr uint8_t kFirmwareVersionPatch = 40;
+constexpr uint8_t kFirmwareVersionPatch = 44;
 #endif
 constexpr char kBleDeviceName[] = "BlueSquid";
 
@@ -45,14 +41,8 @@ constexpr uint32_t kUntrustedClientTimeoutMs = 30UL * 1000UL;
 }  // namespace Ble
 
 namespace Battery {
-#ifndef BLUESQUID_SIMULATED_BATTERY
-#define BLUESQUID_SIMULATED_BATTERY BLUESQUID_SIMULATED_HARDWARE
-#endif
-constexpr bool kSimulatedBattery = BLUESQUID_SIMULATED_BATTERY != 0;
-#ifndef BLUESQUID_BATTERY_CAPACITY_AH
-#define BLUESQUID_BATTERY_CAPACITY_AH 200
-#endif
-constexpr float kCapacityAh = BLUESQUID_BATTERY_CAPACITY_AH;
+// Used until a capacity is saved, and only when no battery monitor reports one.
+constexpr float kCapacityAh = 200.0F;
 }  // namespace Battery
 
 namespace I2c {

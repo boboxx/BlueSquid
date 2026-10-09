@@ -859,7 +859,9 @@ void TouchBleClient::processAlerts(const uint8_t* data, size_t length) {
 }
 
 void TouchBleClient::processSnapshot(const uint8_t* data, size_t length) {
-  if (data == nullptr || length != BlueSquidBle::kSnapshotSize ||
+  if (data == nullptr ||
+      (length != BlueSquidBle::kSnapshotSize &&
+       length != BlueSquidBle::kSnapshotLegacySize) ||
       data[BlueSquidBle::kSnapshotVersion] !=
           BlueSquidBle::kProtocolVersion) {
     return;
@@ -963,6 +965,8 @@ void TouchBleClient::processSnapshot(const uint8_t* data, size_t length) {
       BlueSquidBle::readI16(data + BlueSquidBle::kSnapshotPitchZero) / 100.0F;
   status_.rollZeroDegrees =
       BlueSquidBle::readI16(data + BlueSquidBle::kSnapshotRollZero) / 100.0F;
+  status_.cerboTime = length >= BlueSquidBle::kSnapshotSize
+      ? BlueSquidBle::readU32(data + BlueSquidBle::kSnapshotCerboTime) : 0;
   status_.settingsValid = true;
   status_.lastHeartbeatMs = millis();
   ++receivedSnapshotCount_;

@@ -54,6 +54,7 @@ void* bluesquid_lvgl_pool_alloc(size_t size);
 
 #define LV_USE_BUTTON 1
 #define LV_USE_CANVAS 1
+#define LV_USE_CHART 1
 #define LV_USE_LABEL 1
 #define LV_USE_SLIDER 1
 #define LV_USE_SWITCH 1

@@ -6,6 +6,7 @@
 #include "TouchHotspot.h"
 #include <nvs_flash.h>
 #include "TouchClock.h"
+#include "TouchHistory.h"
 #include "DisplaySchedule.h"
 #include "FirmwareUpdate.h"
 #include "Sp630eChannels.h"
@@ -349,8 +350,6 @@ lv_obj_t* systemConnectionLabel = nullptr;
 lv_obj_t* systemRearFirmwareLabel = nullptr;
 lv_obj_t* systemUptimeLabel = nullptr;
 lv_obj_t* alertBellIcons[5]{};
-lv_obj_t* powerAlertsLabel = nullptr;
-lv_obj_t* powerAlertsDetailLabel = nullptr;
 lv_obj_t* alertsOverlay = nullptr;
 lv_obj_t* alertsSummaryLabel = nullptr;
 lv_obj_t* alertsListLabel = nullptr;
@@ -3118,26 +3117,6 @@ void refreshVictronAlerts(const TouchRemoteStatus& status, bool online) {
     for (lv_obj_t* bell : alertBellIcons)
       if (bell) lv_obj_set_style_text_color(bell, lv_color_hex(bellColor), 0);
 
-    const VictronAlerts::Tracker::Entry* mostSevere = nullptr;
-    for (uint8_t index = 0; index < victronAlerts.count(); ++index) {
-      const auto& entry = victronAlerts.entry(index);
-      if (entry.active && (mostSevere == nullptr ||
-                           entry.level > mostSevere->level))
-        mostSevere = &entry;
-    }
-    if (powerAlertsLabel != nullptr) {
-      if (active) lv_label_set_text_fmt(powerAlertsLabel, "%u active", active);
-      else lv_label_set_text(powerAlertsLabel, state == 2 ? "None active" : "--");
-      lv_obj_set_style_text_color(powerAlertsLabel, lv_color_hex(
-          active ? (mostSevere->level == VictronAlerts::kAlarm ? kColorRed
-                                                                 : kColorAmber)
-                 : kColorText), 0);
-      lv_label_set_text(powerAlertsDetailLabel,
-          mostSevere != nullptr ? alertTitle(*mostSevere).c_str()
-          : state == 0 ? "Controller offline"
-          : state == 1 ? "Waiting for Cerbo GX data"
-          : "All monitored Victron devices OK");
-    }
     if (alertsSummaryLabel != nullptr) {
       String summary;
       if (state == 0) summary = "Controller offline - alert status unknown. ";
@@ -3264,6 +3243,392 @@ void createVictronAlertsOverlay() {
                              &lv_font_montserrat_12, kColorMuted);
   lv_obj_set_width(alertsLogLabel, 764);
   lv_label_set_long_mode(alertsLogLabel, LV_LABEL_LONG_DOT);
+}
+
+// ---------------------------------------------------------------------------
+// Power history (Settings > History). Samples are integrated on the
+// touchscreen and stored on the SD card; see TouchHistory.h.
+
+void setActionAvailable(lv_obj_t* button, bool available);
+
+constexpr int kHistoryChartX = 64, kHistoryChartY = 14;
+constexpr int kHistoryChartWidth = 632, kHistoryChartHeight = 200;
+constexpr uint8_t kHistoryXLabelCount = 8;
+
+TouchHistory::Recorder powerHistory;
+TouchHistory::Chart historyData;
+TouchHistory::Range historyRange = TouchHistory::Range::Day;
+int historyOffset = 0;
+uint32_t historyNextWriteMs = 0;
+const char* historyError = nullptr;
+bool historyLimitChecked = false;
+size_t historyBytes = 0;
+lv_obj_t* historyOverlay = nullptr;
+lv_obj_t* historyChart = nullptr;
+lv_obj_t* historySocChart = nullptr;
+lv_chart_series_t* historyGeneratedSeries = nullptr;
+lv_chart_series_t* historyConsumedSeries = nullptr;
+lv_chart_series_t* historySocSeries = nullptr;
+lv_obj_t* historyRangeButtons[3]{};
+lv_obj_t* historyNextButton = nullptr;
+lv_obj_t* historyPeriodLabel = nullptr;
+lv_obj_t* historyTotalsLabel = nullptr;
+lv_obj_t* historyStatusLabel = nullptr;
+lv_obj_t* historyEmptyLabel = nullptr;
+lv_obj_t* historyYLabels[3]{};
+lv_obj_t* historyXLabels[kHistoryXLabelCount]{};
+
+void showHistory();
+
+// The Cerbo clock is authoritative; correct the touchscreen clock when it is
+// unset or has drifted.
+void syncClockFromCerbo(const TouchRemoteStatus& status, bool online) {
+  if (!online || status.cerboTime == 0 || status.lastHeartbeatMs == 0) return;
+  const uint32_t cerboNow =
+      status.cerboTime + (millis() - status.lastHeartbeatMs) / 1000U;
+  const uint32_t local = TouchClock::utc();
+  const int64_t drift = int64_t(local) - int64_t(cerboNow);
+  if (local != 0 && drift > -60 && drift < 60) return;
+  if (TouchClock::sync(cerboNow))
+    Serial.printf("Clock set from Cerbo (drift %lld s)\n",
+                  static_cast<long long>(local == 0 ? 0 : drift));
+}
+
+void formatEnergy(char* out, size_t size, float wattHours) {
+  if (fabsf(wattHours) >= 1000.0F)
+    snprintf(out, size, "%.2f kWh", wattHours / 1000.0F);
+  else
+    snprintf(out, size, "%.0f Wh", wattHours);
+}
+
+// Writes completed slots to the SD card. Without a card the slots stay
+// queued (newest day) and the write is retried every minute.
+void flushPowerHistory() {
+  if (powerHistory.pending() == 0 ||
+      static_cast<int32_t>(millis() - historyNextWriteMs) < 0)
+    return;
+  historyNextWriteMs = millis() + 60000UL;
+  if (!mountSdCard()) {
+    historyError = sdMountError;
+    return;
+  }
+  bool rotate = !historyLimitChecked;
+  size_t written = 0;
+  while (powerHistory.pending() != 0) {
+    bool created = false;
+    if (!TouchHistory::append(sdCard, powerHistory.front(), created)) {
+      historyError = "Unable to write power history to the SD card.";
+      sdMounted = false;
+      return;
+    }
+    rotate |= created;
+    powerHistory.pop();
+    ++written;
+  }
+  if (rotate) {
+    historyBytes = TouchHistory::enforceLimit(sdCard);
+    historyLimitChecked = true;
+  } else {
+    historyBytes += written * sizeof(TouchHistory::Record);
+  }
+  historyError = nullptr;
+  historyNextWriteMs = millis() + 2000UL;
+  if (historyOverlay != nullptr && !lv_obj_is_hidden(historyOverlay))
+    showHistory();
+}
+
+void recordPowerHistory(const TouchRemoteStatus& status, bool online) {
+  syncClockFromCerbo(status, online);
+  const bool valid = online && status.energyValid;
+  const float generated = float(status.solarPower) + status.dcDcPower +
+                          (status.shoreValid ? status.shorePower : 0);
+  // Battery power is positive while charging, so the remainder of the
+  // generation (or the discharge) is what the loads and inverter used.
+  const float consumed = generated - status.batteryPower;
+  powerHistory.sample(millis(), TouchClock::utc(), valid, generated, consumed,
+                      status.soc);
+  flushPowerHistory();
+}
+
+int32_t niceHistoryMaximum(float value) {
+  if (value <= 10.0F) return 10;
+  const float magnitude = powf(10.0F, floorf(log10f(value)));
+  for (const float step : {1.0F, 2.0F, 2.5F, 5.0F, 10.0F})
+    if (step * magnitude >= value) return int32_t(lroundf(step * magnitude));
+  return int32_t(lroundf(10.0F * magnitude));
+}
+
+void placeHistoryXLabel(uint8_t index, float fraction, const char* text) {
+  lv_obj_t* label = historyXLabels[index];
+  lv_label_set_text(label, text);
+  lv_obj_set_hidden(label, false);
+  lv_obj_update_layout(label);
+  const int x = kHistoryChartX + int(fraction * kHistoryChartWidth) -
+                lv_obj_get_width(label) / 2;
+  lv_obj_set_pos(label, x, kHistoryChartY + kHistoryChartHeight + 6);
+}
+
+void showHistoryAxes() {
+  for (lv_obj_t* label : historyXLabels) lv_obj_set_hidden(label, true);
+  const auto& chart = historyData;
+  char text[8];
+  if (chart.range == TouchHistory::Range::Day) {
+    for (uint8_t index = 0; index < 5; ++index) {
+      snprintf(text, sizeof(text), "%02u:00", index * 6U % 24U);
+      placeHistoryXLabel(index, index / 4.0F, text);
+    }
+    return;
+  }
+  uint8_t used = 0;
+  for (uint8_t bar = 0; bar < chart.bars && used < kHistoryXLabelCount; ++bar) {
+    const bool week = chart.range == TouchHistory::Range::Week;
+    if (!week && bar % 5 != 4) continue;  // every fifth day of a month
+    struct tm local{};
+    localtime_r(&chart.barStart[bar], &local);
+    strftime(text, sizeof(text), week ? "%a" : "%b %e", &local);
+    placeHistoryXLabel(used++, (bar + 0.5F) / chart.bars, text);
+  }
+}
+
+void showHistory() {
+  if (historyOverlay == nullptr) return;
+  for (uint8_t index = 0; index < 3; ++index) {
+    const bool selected = uint8_t(historyRange) == index;
+    lv_obj_set_style_bg_color(historyRangeButtons[index],
+        lv_color_hex(selected ? kColorCardChecked : kColorSurface), 0);
+    lv_obj_set_style_border_color(historyRangeButtons[index],
+        lv_color_hex(selected ? kColorCyan : kColorBorder), 0);
+  }
+  setActionAvailable(historyNextButton, historyOffset > 0);
+
+  const time_t now = TouchClock::utc();
+  bool readable = true;
+  if (now == 0) {
+    TouchHistory::layout(historyRange, historyOffset, 0, historyData);
+    historyData.bars = 0;
+  } else if (mountSdCard()) {
+    if (!historyLimitChecked) {
+      historyBytes = TouchHistory::enforceLimit(sdCard);
+      historyLimitChecked = true;
+    }
+    readable = TouchHistory::load(sdCard, historyRange, historyOffset, now,
+                                  historyData);
+  } else {
+    TouchHistory::layout(historyRange, historyOffset, now, historyData);
+    readable = false;
+  }
+  const auto& chart = historyData;
+
+  float maximum = 0.0F;
+  for (uint8_t bar = 0; bar < chart.bars; ++bar)
+    maximum = fmaxf(maximum, fmaxf(chart.generatedWh[bar], chart.consumedWh[bar]));
+  const int32_t top = niceHistoryMaximum(maximum);
+  lv_chart_set_point_count(historyChart, chart.bars == 0 ? 1 : chart.bars);
+  lv_chart_set_axis_range(historyChart, LV_CHART_AXIS_PRIMARY_Y, 0, top);
+  for (uint8_t bar = 0; bar < chart.bars; ++bar) {
+    lv_chart_set_series_value_by_id(historyChart, historyGeneratedSeries, bar,
+                                    lroundf(chart.generatedWh[bar]));
+    lv_chart_set_series_value_by_id(historyChart, historyConsumedSeries, bar,
+                                    lroundf(chart.consumedWh[bar]));
+  }
+  if (chart.bars == 0) {
+    lv_chart_set_all_values(historyChart, historyGeneratedSeries, 0);
+    lv_chart_set_all_values(historyChart, historyConsumedSeries, 0);
+  }
+  lv_chart_refresh(historyChart);
+  lv_chart_set_point_count(historySocChart, chart.points == 0 ? 1 : chart.points);
+  lv_chart_set_all_values(historySocChart, historySocSeries, LV_CHART_POINT_NONE);
+  for (uint16_t point = 0; point < chart.points; ++point)
+    if (chart.soc[point] != TouchHistory::kUnknownSoc)
+      lv_chart_set_series_value_by_id(historySocChart, historySocSeries, point,
+                                      chart.soc[point]);
+  lv_chart_refresh(historySocChart);
+
+  char text[64];
+  formatEnergy(text, sizeof(text), float(top));
+  lv_label_set_text(historyYLabels[0], text);
+  formatEnergy(text, sizeof(text), top / 2.0F);
+  lv_label_set_text(historyYLabels[1], text);
+  lv_label_set_text(historyYLabels[2], "0");
+  showHistoryAxes();
+
+  if (now == 0) {
+    lv_label_set_text(historyPeriodLabel, "--");
+  } else if (chart.range == TouchHistory::Range::Day && historyOffset == 0) {
+    lv_label_set_text(historyPeriodLabel, "Today");
+  } else if (chart.range == TouchHistory::Range::Day) {
+    struct tm local{};
+    localtime_r(&chart.start, &local);
+    strftime(text, sizeof(text), "%a, %b %e", &local);
+    lv_label_set_text(historyPeriodLabel, text);
+  } else {
+    struct tm first{}, last{};
+    const time_t lastDay = chart.end - 1;
+    localtime_r(&chart.start, &first);
+    localtime_r(&lastDay, &last);
+    char from[16], to[16];
+    strftime(from, sizeof(from), "%b %e", &first);
+    strftime(to, sizeof(to), "%b %e", &last);
+    snprintf(text, sizeof(text), "%s - %s", from, to);
+    lv_label_set_text(historyPeriodLabel, text);
+  }
+
+  char generated[20], consumed[20];
+  formatEnergy(generated, sizeof(generated), chart.totalGeneratedWh);
+  formatEnergy(consumed, sizeof(consumed), chart.totalConsumedWh);
+  lv_label_set_text_fmt(historyTotalsLabel,
+                        "#4DDD91 Generated# %s     #FF6B70 Consumed# %s",
+                        generated, consumed);
+
+  const char* empty = "";
+  if (now == 0) empty = "Waiting for the clock from the Cerbo.";
+  else if (!readable) empty = sdMountError;
+  else if (chart.records == 0) empty = "No power history for this period.";
+  lv_label_set_text(historyEmptyLabel, empty);
+  lv_obj_set_hidden(historyEmptyLabel, empty[0] == '\0');
+
+  if (historyError != nullptr)
+    lv_label_set_text_fmt(historyStatusLabel, "%s  %u readings waiting.",
+                          historyError, unsigned(powerHistory.pending()));
+  else
+    lv_label_set_text_fmt(historyStatusLabel,
+                          "Recorded every 5 minutes. SD card: %u KB of %u KB",
+                          unsigned((historyBytes + 1023) / 1024),
+                          unsigned(TouchHistory::kStorageLimitBytes / 1024));
+}
+
+void historyRangeClicked(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  historyRange = static_cast<TouchHistory::Range>(
+      reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+  historyOffset = 0;
+  showHistory();
+}
+
+void historyStepClicked(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  const int step = lv_event_get_user_data(event) == nullptr ? 1 : -1;
+  historyOffset = max(0, historyOffset + step);
+  showHistory();
+}
+
+void openHistory(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || historyOverlay == nullptr)
+    return;
+  historyOffset = 0;
+  historyNextWriteMs = millis();
+  flushPowerHistory();
+  lv_obj_set_hidden(historyOverlay, false);
+  lv_obj_move_foreground(historyOverlay);
+  showHistory();
+}
+
+lv_obj_t* makeHistoryButton(lv_obj_t* parent, int x, int y, int width,
+                            const char* text, lv_event_cb_t callback,
+                            void* userData) {
+  lv_obj_t* button = lv_button_create(parent);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_size(button, width, 42);
+  lv_obj_set_style_radius(button, 14, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(kColorSurface), 0);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(kColorBorder), 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, userData);
+  lv_obj_t* label = lv_label_create(button);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(kColorText), 0);
+  lv_obj_center(label);
+  return button;
+}
+
+lv_obj_t* makeHistoryChart(lv_obj_t* parent, lv_chart_type_t type) {
+  lv_obj_t* chart = lv_chart_create(parent);
+  lv_obj_set_pos(chart, kHistoryChartX, kHistoryChartY);
+  lv_obj_set_size(chart, kHistoryChartWidth, kHistoryChartHeight);
+  lv_chart_set_type(chart, type);
+  lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(chart, 0, 0);
+  lv_obj_set_style_pad_all(chart, 0, 0);
+  lv_obj_set_style_radius(chart, 0, 0);
+  lv_obj_remove_flag(chart, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(chart, LV_OBJ_FLAG_SCROLLABLE);
+  return chart;
+}
+
+void createHistoryOverlay() {
+  historyOverlay = createPageOverlay("History");
+  const char* names[] = {"Day", "Week", "Month"};
+  for (uintptr_t index = 0; index < 3; ++index)
+    historyRangeButtons[index] = makeHistoryButton(
+        historyOverlay, 438 + int(index) * 118, 8, 110, names[index],
+        historyRangeClicked, reinterpret_cast<void*>(index));
+  makeHistoryButton(historyOverlay, 16, 58, 48, LV_SYMBOL_LEFT,
+                    historyStepClicked, reinterpret_cast<void*>(1));
+  historyNextButton = makeHistoryButton(historyOverlay, 256, 58, 48,
+                                        LV_SYMBOL_RIGHT, historyStepClicked,
+                                        nullptr);
+  historyPeriodLabel = makeLabel(historyOverlay, "--", 64, 69,
+                                 &lv_font_montserrat_18, kColorText);
+  lv_obj_set_width(historyPeriodLabel, 192);
+  lv_obj_set_style_text_align(historyPeriodLabel, LV_TEXT_ALIGN_CENTER, 0);
+  historyTotalsLabel = makeLabel(historyOverlay, "", 320, 70,
+                                 &lv_font_montserrat_16, kColorText);
+  lv_label_set_recolor(historyTotalsLabel, true);
+  lv_obj_set_width(historyTotalsLabel, 464);
+  lv_obj_set_style_text_align(historyTotalsLabel, LV_TEXT_ALIGN_RIGHT, 0);
+
+  lv_obj_t* card = makeCard(historyOverlay, 16, 110, 768, 250);
+  lv_obj_set_style_pad_all(card, 0, 0);
+  lv_obj_set_scrollable(card, false);
+  historyChart = makeHistoryChart(card, LV_CHART_TYPE_BAR);
+  lv_chart_set_div_line_count(historyChart, 5, 0);
+  lv_obj_set_style_line_color(historyChart, lv_color_hex(kColorBorder), 0);
+  lv_obj_set_style_pad_column(historyChart, 4, 0);          // between groups
+  lv_obj_set_style_pad_column(historyChart, 1, LV_PART_ITEMS);  // in a group
+  lv_obj_set_style_radius(historyChart, 2, LV_PART_ITEMS);
+  historyGeneratedSeries = lv_chart_add_series(
+      historyChart, lv_color_hex(kColorGreen), LV_CHART_AXIS_PRIMARY_Y);
+  historyConsumedSeries = lv_chart_add_series(
+      historyChart, lv_color_hex(kColorRed), LV_CHART_AXIS_PRIMARY_Y);
+  historySocChart = makeHistoryChart(card, LV_CHART_TYPE_LINE);
+  lv_chart_set_div_line_count(historySocChart, 0, 0);
+  lv_chart_set_axis_range(historySocChart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+  lv_obj_set_style_line_width(historySocChart, 3, LV_PART_ITEMS);
+  lv_obj_set_style_width(historySocChart, 0, LV_PART_INDICATOR);
+  lv_obj_set_style_height(historySocChart, 0, LV_PART_INDICATOR);
+  historySocSeries = lv_chart_add_series(
+      historySocChart, lv_color_hex(kColorCyan), LV_CHART_AXIS_PRIMARY_Y);
+
+  for (uint8_t index = 0; index < 3; ++index) {
+    historyYLabels[index] = makeLabel(card, "", 0,
+        kHistoryChartY - 7 + index * kHistoryChartHeight / 2,
+        &lv_font_montserrat_12, kColorMuted);
+    lv_obj_set_width(historyYLabels[index], kHistoryChartX - 8);
+    lv_obj_set_style_text_align(historyYLabels[index], LV_TEXT_ALIGN_RIGHT, 0);
+    static const char* const socLabels[] = {"100%", "50%", "0%"};
+    makeLabel(card, socLabels[index], kHistoryChartX + kHistoryChartWidth + 8,
+              kHistoryChartY - 7 + index * kHistoryChartHeight / 2,
+              &lv_font_montserrat_12, kColorCyan);
+  }
+  for (lv_obj_t*& label : historyXLabels)
+    label = makeLabel(card, "", 0, 0, &lv_font_montserrat_12, kColorMuted);
+  historyEmptyLabel = makeLabel(card, "", kHistoryChartX,
+                                kHistoryChartY + kHistoryChartHeight / 2 - 10,
+                                &lv_font_montserrat_16, kColorMuted);
+  lv_obj_set_width(historyEmptyLabel, kHistoryChartWidth);
+  lv_obj_set_style_text_align(historyEmptyLabel, LV_TEXT_ALIGN_CENTER, 0);
+
+  lv_obj_t* legend = makeLabel(historyOverlay,
+      "#4DDD91 " LV_SYMBOL_STOP "# Generated    #FF6B70 " LV_SYMBOL_STOP
+      "# Consumed    #35D4E8 " LV_SYMBOL_MINUS "# State of charge",
+      18, 370, &lv_font_montserrat_14, kColorText);
+  lv_label_set_recolor(legend, true);
+  historyStatusLabel = makeLabel(historyOverlay, "", 18, 392,
+                                 &lv_font_montserrat_12, kColorMuted);
+  lv_obj_set_width(historyStatusLabel, 764);
+  lv_label_set_long_mode(historyStatusLabel, LV_LABEL_LONG_DOT);
 }
 
 void addMenuHitTarget(lv_obj_t* panel, int y, lv_event_cb_t callback) {
@@ -4311,26 +4676,12 @@ void buildUi() {
   addHeader(power, "Power", 3);
   makeLabel(power, "Dashboard", 18, 55, &lv_font_montserrat_16, kColorText);
   addHomePowerSummary(power);
-  batteryLabel = addDetailCard(power, 16, 196, 248, 187,
+  batteryLabel = addDetailCard(power, 16, 196, 380, 187,
                                LV_SYMBOL_BATTERY_3,
                                "Battery details", kColorGreen);
   powerLabel = nullptr;
-  remainingLabel = addDetailCard(power, 272, 196, 248, 187, LV_SYMBOL_DRIVE,
+  remainingLabel = addDetailCard(power, 404, 196, 380, 187, LV_SYMBOL_DRIVE,
                                  "Remaining", kColorAmber);
-  powerAlertsLabel = addDetailCard(power, 528, 196, 256, 187, LV_SYMBOL_BELL,
-                                   "Victron alerts", kColorAmber);
-  lv_obj_t* alertsCard = lv_obj_get_parent(powerAlertsLabel);
-  lv_obj_set_clickable(alertsCard, true);
-  lv_obj_add_event_cb(alertsCard, openVictronAlerts, LV_EVENT_CLICKED,
-                      nullptr);
-  makeLabel(alertsCard, LV_SYMBOL_RIGHT, 226, 24, &lv_font_montserrat_16,
-            kColorMuted);
-  powerAlertsDetailLabel = makeLabel(alertsCard, "", 18, 92,
-                                     &lv_font_montserrat_14, kColorMuted);
-  lv_obj_set_size(powerAlertsDetailLabel, 224, 60);
-  lv_label_set_long_mode(powerAlertsDetailLabel, LV_LABEL_LONG_DOT);
-  makeLabel(alertsCard, "Tap to view or acknowledge", 18, 158,
-            &lv_font_montserrat_12, kColorMuted);
 
   addHeader(lights, "Light", 1);
 
@@ -4387,6 +4738,7 @@ void buildUi() {
   addMenuRow(menuPanel, 201, LV_SYMBOL_REFRESH, "Camper Position", "Pitch, roll and level calibration", kColorCyan, true);
   addMenuRow(menuPanel, 268, LV_SYMBOL_EYE_OPEN, "Display", "Brightness, sleep and overnight schedule", kColorAmber, true);
   addMenuRow(menuPanel, 335, LV_SYMBOL_FILE, "System information", "About BlueSquid, firmware and diagnostics", kColorMuted, false);
+  addMenuHitTarget(menuPanel, 0, openHistory);
   addMenuHitTarget(menuPanel, 67, openVictronAlerts);
   addMenuHitTarget(menuPanel, 134, openSettings);
   addMenuHitTarget(menuPanel, 201, openCamperPosition);
@@ -4402,6 +4754,7 @@ void buildUi() {
   createLabelConfigurationOverlays();
   createSystemInfoOverlay();
   createVictronAlertsOverlay();
+  createHistoryOverlay();
   matchKeyboardCheckButtons();
   lv_obj_add_event_cb(tabs, tabNavigationChanged,
                       LV_EVENT_VALUE_CHANGED, nullptr);
@@ -4420,6 +4773,7 @@ void refreshUi() {
   processSp630ePayload();
   const bool online = transportClient.connected();
   const bool cerboConnected = online && status.energyValid;
+  recordPowerHistory(status, online);
   for (lv_obj_t* icon : victronConnectionIcons)
     setVictronConnectionIcon(icon, online, cerboConnected);
   if (connectionStatusOverlay != nullptr &&

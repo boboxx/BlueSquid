@@ -33,10 +33,16 @@ Acknowledgements contain:
 version:u8, sequence:u16, command:u8, result:u8, stateRevision:u32, target:u8
 ```
 
-The 84-byte state snapshot contains all display data in one notification:
+The 115-byte state snapshot contains all display data in one notification:
 outputs, RGBW state and presets, battery/power data, charger stages, climate,
 pitch/roll, calibration and firmware information. Offsets and scaling are
 defined once in the shared protocol header.
+
+Bytes 111-114 (Controller 1.0.44) carry the Cerbo clock as UTC seconds, read
+from Cerbo system register 830 once a minute; 0 means unknown. The screen sets
+its clock from it when unset or more than 60 seconds off, and uses it to date
+power history. Touchscreen 1.0.63 also accepts the earlier 111-byte snapshot.
+Older screens reject the 115-byte snapshot, so update both targets together.
 
 RGBW gestures are optimistic and coalesced for 40 ms on the touchscreen. One
 `SetRgbwState` transaction carries all four output levels, the selected RGB

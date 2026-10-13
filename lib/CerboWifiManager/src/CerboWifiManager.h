@@ -22,6 +22,7 @@ class CerboWifiManager {
 
  private:
   bool startStation();
+  void join(const char* ssid, const char* password);
   void publishUpdateNetwork();
   void restoreStation();
   struct UpdateRequest { bool start = false; uint32_t id = 0; };

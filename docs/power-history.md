@@ -2,7 +2,9 @@
 
 Settings > History shows energy generated and consumed as bars, with the
 battery state of charge as a line. Day shows hourly bars; Week and Month show
-daily bars for the 7 or 30 days ending on the selected day. The arrows step
+daily bars for the 7 or 30 days ending on the selected day. The totals above
+the chart cover the whole period, so in the Day view they are larger than any
+single (hourly) bar. The arrows step
 back and forward one period.
 
 ## What is recorded

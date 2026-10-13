@@ -5,7 +5,12 @@
 #include "AppConfig.h"
 #include "FirmwareUpdate.h"
 
-namespace { constexpr char kTag[] = "CerboWiFi"; }
+namespace {
+constexpr char kTag[] = "CerboWiFi";
+constexpr uint32_t kStationRetryMs = 15000;
+// Leaves three attempts inside OtaLink::kJoinTimeoutMs.
+constexpr uint32_t kUpdateRetryMs = 10000;
+}
 
 bool CerboWifiManager::begin() {
   updateRequests_ = xQueueCreate(4, sizeof(UpdateRequest));
@@ -15,17 +20,27 @@ bool CerboWifiManager::begin() {
   password_ = settings_.loadCerboStationPassword(WifiDefaults::cerboPassword);
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
+  // This class owns every retry. The core's auto-reconnect rescans as soon
+  // as an attempt fails, and while it is scanning the driver rejects the new
+  // configuration from WiFi.begin() ("sta is connecting, cannot set config").
+  WiFi.setAutoReconnect(false);
   return startStation();
 }
 
-bool CerboWifiManager::startStation() {
+void CerboWifiManager::join(const char* ssid, const char* password) {
   lastAttemptMs_ = millis();
+  // Cancel any attempt still in progress so the new configuration applies.
+  WiFi.disconnect(false);
+  WiFi.begin(ssid, password);
+}
+
+bool CerboWifiManager::startStation() {
   if (ssid_.isEmpty()) {
+    lastAttemptMs_ = millis();
     LOG_INFO(kTag, "Enter Cerbo hotspot credentials on the touchscreen");
     return false;
   }
-  WiFi.begin(ssid_.c_str(), password_.c_str());
+  join(ssid_.c_str(), password_.c_str());
   LOG_INFO(kTag, "Connecting to Cerbo hotspot %s", ssid_.c_str());
   return true;
 }
@@ -37,8 +52,7 @@ void CerboWifiManager::update() {
       const auto login = FirmwareUpdate::credentials();
       updateNetworkActive_.store(true);
       updateSsid_ = login.username;
-      WiFi.disconnect(false);
-      WiFi.begin(login.username, login.password);
+      join(login.username, login.password);
       LOG_INFO(kTag, "Joining touchscreen hotspot for firmware update");
     } else if (!request.start && updateSession_.stop(request.id)) restoreStation();
   }
@@ -49,6 +63,10 @@ void CerboWifiManager::update() {
       restoreStation();
       LOG_WARN(kTag, "Firmware update network session expired; returning to Cerbo");
     } else {
+      if (!joined && millis() - lastAttemptMs_ >= kUpdateRetryMs) {
+        const auto login = FirmwareUpdate::credentials();
+        join(login.username, login.password);
+      }
       updateSession_.status.phase = joined ? OtaLink::Phase::Ready : OtaLink::Phase::Joining;
       publishUpdateNetwork();
       return;
@@ -57,7 +75,6 @@ void CerboWifiManager::update() {
   publishUpdateNetwork();
   if (restartPending_) {
     restartPending_ = false;
-    WiFi.disconnect(false);
     startStation();
   }
   const bool connected = active();
@@ -68,7 +85,7 @@ void CerboWifiManager::update() {
                WiFi.gatewayIP().toString().c_str());
     else LOG_WARN(kTag, "Wi-Fi disconnected; retrying automatically");
   }
-  if (!connected && !ssid_.isEmpty() && millis() - lastAttemptMs_ >= 15000)
+  if (!connected && !ssid_.isEmpty() && millis() - lastAttemptMs_ >= kStationRetryMs)
     startStation();
 }
 
@@ -90,7 +107,6 @@ bool CerboWifiManager::requestUpdateNetwork(bool start, uint32_t id) {
 }
 void CerboWifiManager::restoreStation() {
   updateNetworkActive_.store(false);
-  WiFi.disconnect(false);
   restartPending_ = false;
   startStation();
 }

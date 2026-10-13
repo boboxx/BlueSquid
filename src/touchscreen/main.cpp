@@ -3275,6 +3275,7 @@ lv_obj_t* historyPeriodLabel = nullptr;
 lv_obj_t* historyTotalsLabel = nullptr;
 lv_obj_t* historyStatusLabel = nullptr;
 lv_obj_t* historyEmptyLabel = nullptr;
+lv_obj_t* historyUnitLabel = nullptr;
 lv_obj_t* historyYLabels[3]{};
 lv_obj_t* historyXLabels[kHistoryXLabelCount]{};
 
@@ -3297,6 +3298,8 @@ void syncClockFromCerbo(const TouchRemoteStatus& status, bool online) {
 void formatEnergy(char* out, size_t size, float wattHours) {
   if (fabsf(wattHours) >= 1000.0F)
     snprintf(out, size, "%.2f kWh", wattHours / 1000.0F);
+  else if (wattHours != 0.0F && fabsf(wattHours) < 10.0F)
+    snprintf(out, size, "%.1f Wh", wattHours);
   else
     snprintf(out, size, "%.0f Wh", wattHours);
 }
@@ -3353,7 +3356,9 @@ void recordPowerHistory(const TouchRemoteStatus& status, bool online) {
 int32_t niceHistoryMaximum(float value) {
   if (value <= 10.0F) return 10;
   const float magnitude = powf(10.0F, floorf(log10f(value)));
-  for (const float step : {1.0F, 2.0F, 2.5F, 5.0F, 10.0F})
+  // Fine steps keep the tallest bar in the upper part of the chart.
+  for (const float step : {1.0F, 1.2F, 1.5F, 2.0F, 2.5F, 3.0F, 4.0F, 5.0F,
+                           6.0F, 8.0F, 10.0F})
     if (step * magnitude >= value) return int32_t(lroundf(step * magnitude));
   return int32_t(lroundf(10.0F * magnitude));
 }
@@ -3450,6 +3455,9 @@ void showHistory() {
   formatEnergy(text, sizeof(text), top / 2.0F);
   lv_label_set_text(historyYLabels[1], text);
   lv_label_set_text(historyYLabels[2], "0");
+  lv_label_set_text(historyUnitLabel,
+                    chart.range == TouchHistory::Range::Day
+                        ? "Bars: Wh per hour" : "Bars: Wh per day");
   showHistoryAxes();
 
   if (now == 0) {
@@ -3552,8 +3560,8 @@ lv_obj_t* makeHistoryChart(lv_obj_t* parent, lv_chart_type_t type) {
   lv_obj_set_style_border_width(chart, 0, 0);
   lv_obj_set_style_pad_all(chart, 0, 0);
   lv_obj_set_style_radius(chart, 0, 0);
-  lv_obj_remove_flag(chart, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_remove_flag(chart, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_clickable(chart, false);
+  lv_obj_set_scrollable(chart, false);
   return chart;
 }
 
@@ -3625,6 +3633,10 @@ void createHistoryOverlay() {
       "# Consumed    #35D4E8 " LV_SYMBOL_MINUS "# State of charge",
       18, 370, &lv_font_montserrat_14, kColorText);
   lv_label_set_recolor(legend, true);
+  historyUnitLabel = makeLabel(historyOverlay, "", 584, 370,
+                               &lv_font_montserrat_14, kColorMuted);
+  lv_obj_set_width(historyUnitLabel, 200);
+  lv_obj_set_style_text_align(historyUnitLabel, LV_TEXT_ALIGN_RIGHT, 0);
   historyStatusLabel = makeLabel(historyOverlay, "", 18, 392,
                                  &lv_font_montserrat_12, kColorMuted);
   lv_obj_set_width(historyStatusLabel, 764);

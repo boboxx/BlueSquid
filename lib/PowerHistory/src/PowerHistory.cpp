@@ -1,10 +1,10 @@
-#include "TouchHistory.h"
+#include "PowerHistory.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
-namespace TouchHistory {
+namespace PowerHistory {
 namespace {
 
 // Longest credible gap between samples; longer gaps count as missing data.
@@ -172,6 +172,11 @@ void layout(Range range, int offset, time_t now, Chart& chart) {
 
 bool load(fs::FS& fs, Range range, int offset, time_t now, Chart& chart) {
   layout(range, offset, now, chart);
+  return accumulate(fs, chart);
+}
+
+bool accumulate(fs::FS& fs, Chart& chart) {
+  if (chart.bars == 0 || chart.end <= chart.start) return false;
   if (!fs.exists(kDirectory)) return true;  // nothing recorded yet
   char firstPath[40], lastPath[40];
   monthPath(uint32_t(chart.start), firstPath, sizeof(firstPath));
@@ -214,4 +219,81 @@ bool load(fs::FS& fs, Range range, int offset, time_t now, Chart& chart) {
   return true;
 }
 
-}  // namespace TouchHistory
+namespace Link {
+namespace {
+template <typename T>
+void put(uint8_t*& out, T value) {
+  memcpy(out, &value, sizeof(value));
+  out += sizeof(value);
+}
+template <typename T>
+T get(const uint8_t*& in) {
+  T value;
+  memcpy(&value, in, sizeof(value));
+  in += sizeof(value);
+  return value;
+}
+size_t chartPayloadSize(const Chart& chart) {
+  return 12 + size_t(chart.bars) * 8 + chart.points;
+}
+}  // namespace
+
+size_t encodeChartRequest(uint8_t id, const Chart& chart, uint8_t* out) {
+  uint8_t* cursor = out;
+  put<uint8_t>(cursor, kChartRequest);
+  put<uint8_t>(cursor, id);
+  put<uint8_t>(cursor, chart.bars);
+  put<uint16_t>(cursor, chart.points);
+  put<uint32_t>(cursor, uint32_t(chart.start));
+  // Local days and hours, which may span a daylight-saving change.
+  for (uint8_t bar = 0; bar < chart.bars; ++bar)
+    put<uint16_t>(cursor, uint16_t((chart.barStart[bar + 1] - chart.barStart[bar]) / 60));
+  return size_t(cursor - out);
+}
+
+bool decodeChartRequest(const uint8_t* in, size_t size, Chart& chart) {
+  if (size < 9 || in[0] != kChartRequest) return false;
+  const uint8_t bars = in[2];
+  if (bars == 0 || bars > Chart::kMaxBars || size != 9 + size_t(bars) * 2) return false;
+  const uint8_t* cursor = in + 3;
+  chart = Chart();
+  chart.bars = bars;
+  chart.points = get<uint16_t>(cursor);
+  if (chart.points == 0 || chart.points > Chart::kMaxPoints) return false;
+  chart.start = get<uint32_t>(cursor);
+  chart.barStart[0] = chart.start;
+  for (uint8_t bar = 0; bar < bars; ++bar) {
+    const uint16_t minutes = get<uint16_t>(cursor);
+    if (minutes == 0) return false;
+    chart.barStart[bar + 1] = chart.barStart[bar] + time_t(minutes) * 60;
+  }
+  chart.end = chart.barStart[bars];
+  memset(chart.soc, kUnknownSoc, sizeof(chart.soc));
+  return true;
+}
+
+size_t encodeChart(const Chart& chart, uint8_t* out) {
+  uint8_t* cursor = out;
+  put<uint32_t>(cursor, chart.records);
+  put<float>(cursor, chart.totalGeneratedWh);
+  put<float>(cursor, chart.totalConsumedWh);
+  for (uint8_t bar = 0; bar < chart.bars; ++bar) put<float>(cursor, chart.generatedWh[bar]);
+  for (uint8_t bar = 0; bar < chart.bars; ++bar) put<float>(cursor, chart.consumedWh[bar]);
+  memcpy(cursor, chart.soc, chart.points);
+  return chartPayloadSize(chart);
+}
+
+bool decodeChart(const uint8_t* in, size_t size, Chart& chart) {
+  if (size != chartPayloadSize(chart)) return false;
+  const uint8_t* cursor = in;
+  chart.records = get<uint32_t>(cursor);
+  chart.totalGeneratedWh = get<float>(cursor);
+  chart.totalConsumedWh = get<float>(cursor);
+  for (uint8_t bar = 0; bar < chart.bars; ++bar) chart.generatedWh[bar] = get<float>(cursor);
+  for (uint8_t bar = 0; bar < chart.bars; ++bar) chart.consumedWh[bar] = get<float>(cursor);
+  memcpy(chart.soc, cursor, chart.points);
+  return true;
+}
+}  // namespace Link
+
+}  // namespace PowerHistory

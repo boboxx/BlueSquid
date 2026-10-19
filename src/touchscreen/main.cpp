@@ -6,7 +6,7 @@
 #include "TouchHotspot.h"
 #include <nvs_flash.h>
 #include "TouchClock.h"
-#include "TouchHistory.h"
+#include "PowerHistory.h"
 #include "DisplaySchedule.h"
 #include "FirmwareUpdate.h"
 #include "Sp630eChannels.h"
@@ -25,6 +25,7 @@
 #include <SPI.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -36,6 +37,9 @@
 #include "VictronAlerts.h"
 #include "TouchBoard.h"
 #include "lvgl_port.h"
+#if BLUESQUID_TOUCHSCREEN_10IN
+#include "TouchScale.h"
+#endif
 
 #if BLUESQUID_TOUCHSCREEN_10IN
 // esp_panel_board_custom_conf.h describes this board; a supported-board
@@ -422,13 +426,31 @@ bool rgbOnlyLightType(uint8_t zone) {
 
 lv_color_t zoneColor(uint8_t zone);
 
+// Pixels for a size in layout units: layout units are rendered 8/5 larger
+// on the 10.1-inch screen (TouchScale.h).
+int uiPixels(int value) {
+#if BLUESQUID_TOUCHSCREEN_10IN
+  return TouchScale::up(value);
+#else
+  return value;
+#endif
+}
+
+#if BLUESQUID_TOUCHSCREEN_10IN
+// The 10.1-inch panel has square pixels.
+constexpr int kColourWheelWidth = 250;
+#else
 // Waveshare's 154.88 x 86.72 mm viewing area has non-square pixels at
 // 800 x 480. 233 x 250 pixels is approximately circular on the actual panel.
 constexpr int kColourWheelWidth = 233;
+#endif
 constexpr int kColourWheelHeight = 250;
 
-lv_obj_t* createColourWheel(lv_obj_t* parent, int width, int height, bool interactive) {
+lv_obj_t* createColourWheel(lv_obj_t* parent, int layoutWidth, int layoutHeight,
+                            bool interactive) {
   lv_obj_t* canvas = lv_canvas_create(parent);
+  // The canvas is drawn pixel by pixel at the display's resolution.
+  const int width = uiPixels(layoutWidth), height = uiPixels(layoutHeight);
   const size_t bufferSize = static_cast<size_t>(width) * height * 4;
   void* buffer = heap_caps_calloc(
       1, bufferSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -439,7 +461,7 @@ lv_obj_t* createColourWheel(lv_obj_t* parent, int width, int height, bool intera
   if (buffer == nullptr) {
     lv_obj_delete(canvas);
     lv_obj_t* fallback = lv_obj_create(parent);
-    lv_obj_set_size(fallback, width, height);
+    lv_obj_set_size(fallback, layoutWidth, layoutHeight);
     lv_obj_set_style_radius(fallback, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(fallback, lv_color_hex(kColorBorder), 0);
     lv_obj_set_style_border_width(fallback, 0, 0);
@@ -606,6 +628,10 @@ void styleScreen() {
                             lv_color_hex(kColorBackground), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(kColorText), 0);
+#if BLUESQUID_TOUCHSCREEN_10IN
+  // Centre the 1280x768 layout on the 800-row panel.
+  lv_obj_set_style_pad_top(lv_screen_active(), TouchScale::kTopPadding, 0);
+#endif
 }
 
 void stylePage(lv_obj_t* page) {
@@ -716,6 +742,137 @@ void applyDeviceLabels() {
       if (icon) lv_obj_set_style_text_color(icon, lv_color_hex(deviceIconColour(index, defaultDeviceColour(index))), 0);
   }
   applyDeviceDisplayLayout();
+}
+
+// Names, icons, colours and layout are shared through the Controller so that
+// every touchscreen shows the same set (TouchDisplaySync).
+static_assert(kDeviceLabelCount == TouchDisplaySync::kLabelCount &&
+                  kDeviceLabelLength == TouchDisplaySync::kNameLength + 1,
+              "Display sync must cover every device label");
+bool displaySyncRequested = false;
+// An edit that could not be sent is uploaded on reconnect, rather than being
+// replaced by the Controller's older copy.
+bool displayUploadPending = false;
+
+void saveDeviceLabelPreferences(uint8_t index) {
+  if (!uiPreferencesReady) return;
+  uiPreferences.putString(deviceLabels[index].nvsKey, deviceLabels[index].value);
+  uiPreferences.putUChar(deviceLabels[index].iconNvsKey, deviceLabels[index].icon);
+  char colourKey[16]{}; snprintf(colourKey, sizeof(colourKey), "icon_col_%u", index);
+  uiPreferences.putUChar(colourKey, deviceIconColours[index]);
+}
+
+void saveDeviceLayoutPreferences() {
+  if (!uiPreferencesReady) return;
+  for (uint8_t index = 0; index < kDeviceLabelCount - 1; ++index) {
+    char visibleKey[12]{};
+    char orderKey[12]{};
+    snprintf(visibleKey, sizeof(visibleKey), "dev_vis_%u", index);
+    snprintf(orderKey, sizeof(orderKey), "dev_ord_%u", index);
+    uiPreferences.putBool(visibleKey, deviceVisible[index]);
+    uiPreferences.putUChar(orderKey, deviceOrder[index]);
+  }
+}
+
+bool sendDisplayLabel(uint8_t index) {
+  TouchDisplaySync::Label label;
+  label.index = index;
+  label.icon = deviceLabels[index].icon;
+  label.colour = deviceIconColours[index];
+  strlcpy(label.name, deviceLabels[index].value, sizeof(label.name));
+  const bool sent = transportClient.sendDisplaySetting(TouchDisplaySync::encodeLabel(label));
+  if (!sent) displayUploadPending = true;
+  return sent;
+}
+
+bool sendDisplayLayout() {
+  TouchDisplaySync::Layout layout;
+  for (uint8_t index = 0; index < TouchDisplaySync::kLayoutCount; ++index) {
+    layout.visible[index] = deviceVisible[index];
+    layout.order[index] = deviceOrder[index];
+  }
+  const bool sent = transportClient.sendDisplaySetting(TouchDisplaySync::encodeLayout(layout));
+  if (!sent) displayUploadPending = true;
+  return sent;
+}
+
+bool uploadDisplaySettings() {
+  bool sent = true;
+  for (uint8_t index = 0; index < kDeviceLabelCount; ++index)
+    sent = sendDisplayLabel(index) && sent;
+  return sendDisplayLayout() && sent;
+}
+
+bool displaySettingsCustomized() {
+  for (uint8_t index = 0; index < kDeviceLabelCount; ++index)
+    if (strcmp(deviceLabels[index].value, deviceLabels[index].channelName) != 0 ||
+        deviceLabels[index].icon != deviceLabels[index].defaultIcon ||
+        deviceIconColours[index] != 0)
+      return true;
+  for (uint8_t index = 0; index < kDeviceLabelCount - 1; ++index)
+    if (!deviceVisible[index] || deviceOrder[index] != index) return true;
+  return false;
+}
+
+// Returns true when the message changed what this screen displays.
+bool applyDisplayMessage(const char* message) {
+  if (strcmp(message, TouchDisplaySync::kNone) == 0) {
+    // Nothing stored yet. Seed the Controller only from a customized screen,
+    // so a new screen's defaults never replace another screen's settings.
+    if (displaySettingsCustomized())
+      Serial.printf("Display settings: seeding Controller from this screen (%s)\n",
+                    uploadDisplaySettings() ? "sent" : "will retry");
+    return false;
+  }
+  TouchDisplaySync::Label label;
+  if (TouchDisplaySync::parseLabel(message, label)) {
+    if (label.icon >= kDeviceIconCount || label.colour >= kIconColourCount) return false;
+    DeviceLabelSetting& target = deviceLabels[label.index];
+    if (strcmp(target.value, label.name) == 0 && target.icon == label.icon &&
+        deviceIconColours[label.index] == label.colour)
+      return false;
+    strlcpy(target.value, label.name, kDeviceLabelLength);
+    target.icon = label.icon;
+    deviceIconColours[label.index] = label.colour;
+    saveDeviceLabelPreferences(label.index);
+    return true;
+  }
+  TouchDisplaySync::Layout layout;
+  if (TouchDisplaySync::parseLayout(message, layout)) {
+    if (memcmp(layout.visible, deviceVisible, sizeof(deviceVisible)) == 0 &&
+        memcmp(layout.order, deviceOrder, sizeof(deviceOrder)) == 0)
+      return false;
+    memcpy(deviceVisible, layout.visible, sizeof(deviceVisible));
+    memcpy(deviceOrder, layout.order, sizeof(deviceOrder));
+    saveDeviceLayoutPreferences();
+    return true;
+  }
+  Serial.printf("Display settings message rejected: %s\n", message);
+  return false;
+}
+
+// Called with the LVGL lock held.
+void processDisplaySync() {
+  if (!transportClient.connected()) {
+    displaySyncRequested = false;
+    return;
+  }
+  if (!displaySyncRequested) {
+    if (displayUploadPending) {
+      displayUploadPending = false;
+      displaySyncRequested = uploadDisplaySettings();
+    } else {
+      displaySyncRequested = transportClient.requestDisplaySettings();
+    }
+  }
+  char message[TouchDisplaySync::kMessageSize];
+  bool changed = false;
+  while (transportClient.nextDisplayMessage(message))
+    changed = applyDisplayMessage(message) || changed;
+  if (changed) {
+    applyDeviceLabels();
+    Serial.println("Display settings: updated from Controller");
+  }
 }
 
 bool overnightNow() {
@@ -2457,11 +2614,8 @@ void saveIconSelection(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || editedDeviceLabel >= kDeviceLabelCount) return;
   deviceLabels[editedDeviceLabel].icon = editedDeviceIcon;
   deviceIconColours[editedDeviceLabel] = editedDeviceColour;
-  if (uiPreferencesReady) {
-    uiPreferences.putUChar(deviceLabels[editedDeviceLabel].iconNvsKey, editedDeviceIcon);
-    char key[16]{}; snprintf(key, sizeof(key), "icon_col_%u", editedDeviceLabel);
-    uiPreferences.putUChar(key, editedDeviceColour);
-  }
+  saveDeviceLabelPreferences(editedDeviceLabel);
+  sendDisplayLabel(editedDeviceLabel);
   applyDeviceLabels();
   lv_obj_set_hidden(iconPickerOverlay, true);
 }
@@ -2496,22 +2650,10 @@ void saveDeviceLabel(lv_event_t* event) {
     } // Hidden devices retain their last position until explicitly placed.
 
   }
-  if (uiPreferencesReady) {
-    uiPreferences.putString(deviceLabels[editedDeviceLabel].nvsKey,
-                            deviceLabels[editedDeviceLabel].value);
-    uiPreferences.putUChar(deviceLabels[editedDeviceLabel].iconNvsKey,
-                           deviceLabels[editedDeviceLabel].icon);
-    char colourKey[16]{}; snprintf(colourKey, sizeof(colourKey), "icon_col_%u", editedDeviceLabel);
-    uiPreferences.putUChar(colourKey, deviceIconColours[editedDeviceLabel]);
-    for (uint8_t index = 0; index < kDeviceLabelCount - 1; ++index) {
-      char visibleKey[12]{};
-      char orderKey[12]{};
-      snprintf(visibleKey, sizeof(visibleKey), "dev_vis_%u", index);
-      snprintf(orderKey, sizeof(orderKey), "dev_ord_%u", index);
-      uiPreferences.putBool(visibleKey, deviceVisible[index]);
-      uiPreferences.putUChar(orderKey, deviceOrder[index]);
-    }
-  }
+  saveDeviceLabelPreferences(editedDeviceLabel);
+  saveDeviceLayoutPreferences();
+  sendDisplayLabel(editedDeviceLabel);
+  sendDisplayLayout();
   if (!lv_obj_is_hidden(labelEditorChannelsRow)) {
     const uint8_t zone = editedDeviceLabel - kLabelRgbwLight1;
     const uint8_t outputs = editedLightOutputs();
@@ -2933,17 +3075,10 @@ void importConfigurationClicked(lv_event_t* event) {
     deviceLabels[index].icon = imported.icons[index];
     deviceIconColours[index] = imported.iconColours[index];
   }
-  if (uiPreferencesReady) {
-    uiPreferences.putUShort("sleep_min", sleepTimeoutMinutes);
-    for (uint8_t index = 0; index < kDeviceLabelCount; ++index) {
-      uiPreferences.putString(deviceLabels[index].nvsKey,
-                              deviceLabels[index].value);
-      uiPreferences.putUChar(deviceLabels[index].iconNvsKey,
-                             deviceLabels[index].icon);
-      char colourKey[16]{}; snprintf(colourKey, sizeof(colourKey), "icon_col_%u", index);
-      uiPreferences.putUChar(colourKey, deviceIconColours[index]);
-    }
-  }
+  if (uiPreferencesReady) uiPreferences.putUShort("sleep_min", sleepTimeoutMinutes);
+  for (uint8_t index = 0; index < kDeviceLabelCount; ++index)
+    saveDeviceLabelPreferences(index);
+  uploadDisplaySettings();
   applyDeviceLabels();
   transportClient.send(BlueSquidControl::Command::RequestStatus, 0, 0);
   setExportStatus("Configuration imported. Pump and accessory 3 remain off.",
@@ -3247,7 +3382,7 @@ void createVictronAlertsOverlay() {
 
 // ---------------------------------------------------------------------------
 // Power history (Settings > History). Samples are integrated on the
-// touchscreen and stored on the SD card; see TouchHistory.h.
+// touchscreen and stored on the SD card; see PowerHistory.h.
 
 void setActionAvailable(lv_obj_t* button, bool available);
 
@@ -3255,9 +3390,9 @@ constexpr int kHistoryChartX = 64, kHistoryChartY = 14;
 constexpr int kHistoryChartWidth = 632, kHistoryChartHeight = 200;
 constexpr uint8_t kHistoryXLabelCount = 8;
 
-TouchHistory::Recorder powerHistory;
-TouchHistory::Chart historyData;
-TouchHistory::Range historyRange = TouchHistory::Range::Day;
+PowerHistory::Recorder powerHistory;
+PowerHistory::Chart historyData;
+PowerHistory::Range historyRange = PowerHistory::Range::Day;
 int historyOffset = 0;
 uint32_t historyNextWriteMs = 0;
 const char* historyError = nullptr;
@@ -3319,7 +3454,7 @@ void flushPowerHistory() {
   size_t written = 0;
   while (powerHistory.pending() != 0) {
     bool created = false;
-    if (!TouchHistory::append(sdCard, powerHistory.front(), created)) {
+    if (!PowerHistory::append(sdCard, powerHistory.front(), created)) {
       historyError = "Unable to write power history to the SD card.";
       sdMounted = false;
       return;
@@ -3329,10 +3464,10 @@ void flushPowerHistory() {
     ++written;
   }
   if (rotate) {
-    historyBytes = TouchHistory::enforceLimit(sdCard);
+    historyBytes = PowerHistory::enforceLimit(sdCard);
     historyLimitChecked = true;
   } else {
-    historyBytes += written * sizeof(TouchHistory::Record);
+    historyBytes += written * sizeof(PowerHistory::Record);
   }
   historyError = nullptr;
   historyNextWriteMs = millis() + 2000UL;
@@ -3377,7 +3512,7 @@ void showHistoryAxes() {
   for (lv_obj_t* label : historyXLabels) lv_obj_set_hidden(label, true);
   const auto& chart = historyData;
   char text[8];
-  if (chart.range == TouchHistory::Range::Day) {
+  if (chart.range == PowerHistory::Range::Day) {
     for (uint8_t index = 0; index < 5; ++index) {
       snprintf(text, sizeof(text), "%02u:00", index * 6U % 24U);
       placeHistoryXLabel(index, index / 4.0F, text);
@@ -3386,7 +3521,7 @@ void showHistoryAxes() {
   }
   uint8_t used = 0;
   for (uint8_t bar = 0; bar < chart.bars && used < kHistoryXLabelCount; ++bar) {
-    const bool week = chart.range == TouchHistory::Range::Week;
+    const bool week = chart.range == PowerHistory::Range::Week;
     if (!week && bar % 5 != 4) continue;  // every fifth day of a month
     struct tm local{};
     localtime_r(&chart.barStart[bar], &local);
@@ -3395,33 +3530,28 @@ void showHistoryAxes() {
   }
 }
 
-void showHistory() {
-  if (historyOverlay == nullptr) return;
-  for (uint8_t index = 0; index < 3; ++index) {
-    const bool selected = uint8_t(historyRange) == index;
-    lv_obj_set_style_bg_color(historyRangeButtons[index],
-        lv_color_hex(selected ? kColorCardChecked : kColorSurface), 0);
-    lv_obj_set_style_border_color(historyRangeButtons[index],
-        lv_color_hex(selected ? kColorCyan : kColorBorder), 0);
-  }
-  setActionAvailable(historyNextButton, historyOffset > 0);
+// The Controller records the history (PowerHistory::Link); this screen asks
+// it for each chart. An SD card, where fitted, keeps a backup that is shown
+// only while the Controller is offline and that restores the Controller's
+// older records (see uploadHistory).
+enum class HistorySource : uint8_t { None, Controller, SdCard };
+HistorySource historySource = HistorySource::None;
+uint8_t historyRequestId = 0;
+constexpr uint8_t kHistoryUploadId = 0xFF;  // chart requests use other ids
+bool historyLoading = false;
+bool historyTimedOut = false;
+uint32_t historyRequestedMs = 0;
+PowerHistory::Link::Status controllerHistory{};
+bool controllerHistoryKnown = false;
+uint32_t historyUploadedRecords = 0;
 
+bool sendHistoryRequest(uint8_t opcode, uint8_t id) {
+  const uint8_t request[2] = {opcode, id};
+  return transportClient.sendHistory(request, sizeof(request));
+}
+
+void renderHistory() {
   const time_t now = TouchClock::utc();
-  bool readable = true;
-  if (now == 0) {
-    TouchHistory::layout(historyRange, historyOffset, 0, historyData);
-    historyData.bars = 0;
-  } else if (mountSdCard()) {
-    if (!historyLimitChecked) {
-      historyBytes = TouchHistory::enforceLimit(sdCard);
-      historyLimitChecked = true;
-    }
-    readable = TouchHistory::load(sdCard, historyRange, historyOffset, now,
-                                  historyData);
-  } else {
-    TouchHistory::layout(historyRange, historyOffset, now, historyData);
-    readable = false;
-  }
   const auto& chart = historyData;
 
   float maximum = 0.0F;
@@ -3444,7 +3574,7 @@ void showHistory() {
   lv_chart_set_point_count(historySocChart, chart.points == 0 ? 1 : chart.points);
   lv_chart_set_all_values(historySocChart, historySocSeries, LV_CHART_POINT_NONE);
   for (uint16_t point = 0; point < chart.points; ++point)
-    if (chart.soc[point] != TouchHistory::kUnknownSoc)
+    if (chart.soc[point] != PowerHistory::kUnknownSoc)
       lv_chart_set_series_value_by_id(historySocChart, historySocSeries, point,
                                       chart.soc[point]);
   lv_chart_refresh(historySocChart);
@@ -3456,15 +3586,15 @@ void showHistory() {
   lv_label_set_text(historyYLabels[1], text);
   lv_label_set_text(historyYLabels[2], "0");
   lv_label_set_text(historyUnitLabel,
-                    chart.range == TouchHistory::Range::Day
+                    chart.range == PowerHistory::Range::Day
                         ? "Bars: Wh per hour" : "Bars: Wh per day");
   showHistoryAxes();
 
   if (now == 0) {
     lv_label_set_text(historyPeriodLabel, "--");
-  } else if (chart.range == TouchHistory::Range::Day && historyOffset == 0) {
+  } else if (chart.range == PowerHistory::Range::Day && historyOffset == 0) {
     lv_label_set_text(historyPeriodLabel, "Today");
-  } else if (chart.range == TouchHistory::Range::Day) {
+  } else if (chart.range == PowerHistory::Range::Day) {
     struct tm local{};
     localtime_r(&chart.start, &local);
     strftime(text, sizeof(text), "%a, %b %e", &local);
@@ -3490,24 +3620,245 @@ void showHistory() {
 
   const char* empty = "";
   if (now == 0) empty = "Waiting for the clock from the Cerbo.";
-  else if (!readable) empty = sdMountError;
+  else if (historyLoading) empty = "Loading from the Controller...";
+  else if (historyTimedOut) empty = "No answer from the Controller. Try again.";
+  else if (historySource == HistorySource::None)
+    empty = transportClient.connected()
+        ? "Update the Controller firmware to record power history."
+        : "Controller offline; power history unavailable.";
   else if (chart.records == 0) empty = "No power history for this period.";
   lv_label_set_text(historyEmptyLabel, empty);
   lv_obj_set_hidden(historyEmptyLabel, empty[0] == '\0');
 
-  if (historyError != nullptr)
-    lv_label_set_text_fmt(historyStatusLabel, "%s  %u readings waiting.",
-                          historyError, unsigned(powerHistory.pending()));
-  else
+  if (historySource == HistorySource::SdCard)
     lv_label_set_text_fmt(historyStatusLabel,
-                          "Recorded every 5 minutes. SD card: %u KB of %u KB",
-                          unsigned((historyBytes + 1023) / 1024),
-                          unsigned(TouchHistory::kStorageLimitBytes / 1024));
+                          "Controller offline: showing this screen's SD card backup.");
+  else if (controllerHistoryKnown && historyUploadedRecords != 0)
+    lv_label_set_text_fmt(historyStatusLabel,
+                          "Recorded every 5 minutes by the Controller: %u KB of %u KB. "
+                          "%lu older readings restored from the SD card.",
+                          unsigned((controllerHistory.bytes + 1023) / 1024),
+                          unsigned(controllerHistory.limit / 1024),
+                          static_cast<unsigned long>(historyUploadedRecords));
+  else if (controllerHistoryKnown)
+    lv_label_set_text_fmt(historyStatusLabel,
+                          "Recorded every 5 minutes by the Controller: %u KB of %u KB",
+                          unsigned((controllerHistory.bytes + 1023) / 1024),
+                          unsigned(controllerHistory.limit / 1024));
+  else
+    lv_label_set_text(historyStatusLabel, "Recorded every 5 minutes by the Controller.");
+}
+
+void showHistory() {
+  if (historyOverlay == nullptr) return;
+  for (uint8_t index = 0; index < 3; ++index) {
+    const bool selected = uint8_t(historyRange) == index;
+    lv_obj_set_style_bg_color(historyRangeButtons[index],
+        lv_color_hex(selected ? kColorCardChecked : kColorSurface), 0);
+    lv_obj_set_style_border_color(historyRangeButtons[index],
+        lv_color_hex(selected ? kColorCyan : kColorBorder), 0);
+  }
+  setActionAvailable(historyNextButton, historyOffset > 0);
+
+  const time_t now = TouchClock::utc();
+  historyLoading = historyTimedOut = false;
+  historySource = HistorySource::None;
+  PowerHistory::layout(historyRange, historyOffset, now, historyData);
+  if (now == 0) {
+    historyData.bars = 0;
+  } else if (transportClient.historyAvailable()) {
+    historySource = HistorySource::Controller;
+    uint8_t request[PowerHistory::Link::kMaximumMessage];
+    if (++historyRequestId == kHistoryUploadId) historyRequestId = 0;
+    const size_t size = PowerHistory::Link::encodeChartRequest(
+        historyRequestId, historyData, request);
+    historyLoading = transportClient.sendHistory(request, size);
+    historyTimedOut = !historyLoading;
+    historyRequestedMs = millis();
+    sendHistoryRequest(PowerHistory::Link::kStatusRequest, historyRequestId);
+  } else if (!transportClient.connected() && sdMounted) {
+    historySource = HistorySource::SdCard;
+    PowerHistory::load(sdCard, historyRange, historyOffset, now, historyData);
+  }
+  renderHistory();
+}
+
+// Restores the Controller's history from this screen's SD card: records
+// older than the Controller's first recorded slot, sent oldest first. The
+// Controller ignores records it already holds, so an interrupted upload
+// resumes where it stopped.
+struct HistoryUpload {
+  bool active = false;     // status requested or records being sent
+  bool awaiting = false;   // a request is waiting for its reply
+  bool complete = false;   // nothing more to send on this connection
+  uint32_t sentMs = 0;
+  uint32_t retryMs = 0;
+  uint32_t until = 0, after = 0;
+  uint32_t restored = 0;
+  String files[16];
+  uint8_t fileCount = 0, fileIndex = 0;
+  File file;
+} historyUpload;
+
+void resetHistoryUpload(bool complete) {
+  if (historyUpload.file) historyUpload.file.close();
+  historyUpload.active = historyUpload.awaiting = false;
+  historyUpload.complete = complete;
+  historyUpload.retryMs = millis() + 60000UL;
+}
+
+bool readHistoryRecord(File& file, size_t index, PowerHistory::Record& record) {
+  return file.seek(index * sizeof(record)) &&
+         file.read(reinterpret_cast<uint8_t*>(&record), sizeof(record)) == sizeof(record);
+}
+
+// Opens the next monthly file holding records in (after, until), positioned
+// at its first such record. Returns false when no file remains.
+bool openNextHistoryFile() {
+  auto& upload = historyUpload;
+  while (upload.fileIndex < upload.fileCount) {
+    File file = sdCard.open(upload.files[upload.fileIndex++], FILE_READ);
+    const size_t count = file ? file.size() / sizeof(PowerHistory::Record) : 0;
+    PowerHistory::Record first{}, last{};
+    if (count == 0 || !readHistoryRecord(file, 0, first) ||
+        !readHistoryRecord(file, count - 1, last) || last.time <= upload.after) {
+      if (file) file.close();
+      continue;
+    }
+    if (first.time >= upload.until) {  // later files are newer still
+      file.close();
+      return false;
+    }
+    size_t low = 0, high = count;  // records are in time order
+    while (low < high) {
+      const size_t middle = (low + high) / 2;
+      PowerHistory::Record record{};
+      if (!readHistoryRecord(file, middle, record)) break;
+      if (record.time <= upload.after) low = middle + 1;
+      else high = middle;
+    }
+    file.seek(low * sizeof(PowerHistory::Record));
+    upload.file = file;
+    return true;
+  }
+  return false;
+}
+
+void startHistoryUpload(const PowerHistory::Link::Status& status) {
+  auto& upload = historyUpload;
+  if (status.recordingSince == 0) {  // wait until the Controller records
+    resetHistoryUpload(false);
+    return;
+  }
+  upload.until = status.recordingSince;
+  upload.after = status.importedUntil;
+  upload.fileCount = upload.fileIndex = 0;
+  File directory = sdCard.open(PowerHistory::kDirectory);
+  if (directory && directory.isDirectory()) {
+    for (File file = directory.openNextFile(); file && upload.fileCount < 16;
+         file = directory.openNextFile()) {
+      const String path = file.path();
+      if (!file.isDirectory() && path.endsWith(".bin")) upload.files[upload.fileCount++] = path;
+      file.close();
+    }
+  }
+  directory.close();
+  std::sort(upload.files, upload.files + upload.fileCount);  // "YYYY-MM.bin"
+  upload.awaiting = false;
+}
+
+void continueHistoryUpload() {
+  namespace Link = PowerHistory::Link;
+  auto& upload = historyUpload;
+  if (!transportClient.historyAvailable()) {
+    if (upload.active || upload.complete) resetHistoryUpload(false);
+    upload.retryMs = millis();
+    return;
+  }
+  if (upload.complete) return;
+  if (!upload.active) {
+    // Only screens with a working SD card hold records to restore.
+    if (!sdMounted || static_cast<int32_t>(millis() - upload.retryMs) < 0) return;
+    upload.active = upload.awaiting = sendHistoryRequest(Link::kStatusRequest, kHistoryUploadId);
+    upload.until = 0;
+    upload.sentMs = millis();
+    return;
+  }
+  if (upload.awaiting) {
+    if (millis() - upload.sentMs > 5000) resetHistoryUpload(false);
+    return;
+  }
+  uint8_t message[Link::kMaximumMessage] = {Link::kImport, kHistoryUploadId};
+  size_t count = 0;
+  while (count < Link::kImportRecords) {
+    if (!upload.file && !openNextHistoryFile()) break;
+    PowerHistory::Record record{};
+    if (upload.file.read(reinterpret_cast<uint8_t*>(&record), sizeof(record)) != sizeof(record)) {
+      upload.file.close();
+      continue;
+    }
+    if (record.time <= upload.after) continue;
+    if (record.time >= upload.until) {
+      upload.file.close();
+      upload.fileIndex = upload.fileCount;  // later records are newer
+      break;
+    }
+    memcpy(message + 2 + count * sizeof(record), &record, sizeof(record));
+    ++count;
+  }
+  if (count == 0) {
+    if (upload.restored != 0)
+      Serial.printf("Power history: restored %lu readings to the Controller\n",
+                    static_cast<unsigned long>(upload.restored));
+    resetHistoryUpload(true);
+    return;
+  }
+  upload.awaiting = transportClient.sendHistory(message, 2 + count * sizeof(PowerHistory::Record));
+  upload.sentMs = millis();
+}
+
+// Called with the LVGL lock held.
+void processHistory() {
+  namespace Link = PowerHistory::Link;
+  const bool visible = historyOverlay != nullptr && !lv_obj_is_hidden(historyOverlay);
+  static TouchBleClient::HistoryMessage message;  // too large for the stack
+  while (transportClient.nextHistoryMessage(message)) {
+    if (message.opcode == Link::kStatusResponse && message.length >= 16) {
+      memcpy(&controllerHistory.recordingSince, message.payload, 4);
+      memcpy(&controllerHistory.importedUntil, message.payload + 4, 4);
+      memcpy(&controllerHistory.bytes, message.payload + 8, 4);
+      memcpy(&controllerHistory.limit, message.payload + 12, 4);
+      controllerHistoryKnown = true;
+      if (message.id == kHistoryUploadId && historyUpload.active && historyUpload.until == 0)
+        startHistoryUpload(controllerHistory);
+      if (visible && !historyLoading) renderHistory();
+    } else if (message.opcode == Link::kImportResponse && message.length >= 5 &&
+               message.id == kHistoryUploadId) {
+      historyUpload.awaiting = false;
+      historyUpload.restored += message.payload[0];
+      historyUploadedRecords = historyUpload.restored;
+      memcpy(&historyUpload.after, message.payload + 1, 4);
+    } else if (message.opcode == Link::kChartResponse && historyLoading &&
+               message.id == historyRequestId) {
+      historyLoading = false;
+      historyTimedOut = !Link::decodeChart(message.payload, message.length, historyData);
+      if (visible) renderHistory();
+    }
+  }
+  if (historyLoading && millis() - historyRequestedMs > 5000) {
+    historyLoading = false;
+    historyTimedOut = true;
+    if (visible) renderHistory();
+  } else if (visible && !historyLoading && historySource == HistorySource::Controller &&
+             millis() - historyRequestedMs > 60000) {
+    showHistory();  // the Controller adds a slot every 5 minutes
+  }
+  continueHistoryUpload();
 }
 
 void historyRangeClicked(lv_event_t* event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  historyRange = static_cast<TouchHistory::Range>(
+  historyRange = static_cast<PowerHistory::Range>(
       reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
   historyOffset = 0;
   showHistory();
@@ -4618,8 +4969,8 @@ void buildUi() {
   iconFont28.fallback = &bluesquid_font_lightbulb_28;
   climateFont16 = lv_font_montserrat_16;
   climateFont16.fallback = &bluesquid_font_climate_24;
-  climateFont16.line_height = 24;
-  climateFont16.base_line = 3;
+  climateFont16.line_height = uiPixels(24);
+  climateFont16.base_line = uiPixels(3);
   lv_obj_t* tabs = lv_tabview_create(lv_screen_active());
   lv_tabview_set_tab_bar_position(tabs, LV_DIR_BOTTOM);
   lv_tabview_set_tab_bar_size(tabs, 64);
@@ -4783,6 +5134,8 @@ void refreshUi() {
   if (keyboardVisible) lv_obj_set_hidden(bar, true);
   else lv_obj_set_hidden(bar, false);
   processSp630ePayload();
+  processDisplaySync();
+  processHistory();
   const bool online = transportClient.connected();
   const bool cerboConnected = online && status.energyValid;
   recordPowerHistory(status, online);
@@ -5194,7 +5547,7 @@ void setup() {
   buildUi();
   displayDimmer = lv_obj_create(lv_layer_top());
   lv_obj_remove_style_all(displayDimmer);
-  lv_obj_set_size(displayDimmer, 800, 480);
+  lv_obj_set_size(displayDimmer, lv_pct(100), lv_pct(100));
   lv_obj_set_clickable(displayDimmer, false);
   lv_obj_set_scrollable(displayDimmer, false);
   lv_obj_set_style_bg_color(displayDimmer, lv_color_black(), 0);

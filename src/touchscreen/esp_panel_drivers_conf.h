@@ -73,7 +73,13 @@
     #define ESP_PANEL_DRIVERS_LCD_USE_ILI9341           (0)
     #define ESP_PANEL_DRIVERS_LCD_USE_ILI9881C          (0)
     #define ESP_PANEL_DRIVERS_LCD_USE_JD9165            (0)
+    // The 10.1-inch BoardConfig constructor uses the runtime driver factory.
+    // COMPILE_UNUSED_DRIVERS alone does not register drivers in that factory.
+    #if defined(BLUESQUID_TOUCHSCREEN_10IN) && BLUESQUID_TOUCHSCREEN_10IN
+    #define ESP_PANEL_DRIVERS_LCD_USE_JD9365            (1)
+    #else
     #define ESP_PANEL_DRIVERS_LCD_USE_JD9365            (0)
+    #endif
     #define ESP_PANEL_DRIVERS_LCD_USE_NV3022B           (0)
     #define ESP_PANEL_DRIVERS_LCD_USE_SH8601            (0)
     #define ESP_PANEL_DRIVERS_LCD_USE_SPD2010           (0)
@@ -128,7 +134,11 @@
     #define ESP_PANEL_DRIVERS_TOUCH_USE_CST816S         (0)
     #define ESP_PANEL_DRIVERS_TOUCH_USE_CST820          (0)
     #define ESP_PANEL_DRIVERS_TOUCH_USE_FT5x06          (0)
+    #if defined(BLUESQUID_TOUCHSCREEN_10IN) && BLUESQUID_TOUCHSCREEN_10IN
+    #define ESP_PANEL_DRIVERS_TOUCH_USE_GT911           (1)
+    #else
     #define ESP_PANEL_DRIVERS_TOUCH_USE_GT911           (0)
+    #endif
     #define ESP_PANEL_DRIVERS_TOUCH_USE_GT1151          (0)
     #define ESP_PANEL_DRIVERS_TOUCH_USE_SPD2010         (0)
     #define ESP_PANEL_DRIVERS_TOUCH_USE_ST1633          (0)

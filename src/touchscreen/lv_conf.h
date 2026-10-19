@@ -31,7 +31,12 @@ void* bluesquid_lvgl_pool_alloc(size_t size);
 #define LV_MEM_SIZE (512U * 1024U)
 #define LV_MEM_POOL_ALLOC bluesquid_lvgl_pool_alloc
 #define LV_DEF_REFR_PERIOD 30
+#if BLUESQUID_TOUCHSCREEN_10IN
+// Native 1280x800 rendering at 8/5 of the 7-inch layout (TouchScale.h).
+#define LV_DPI_DEF 208
+#else
 #define LV_DPI_DEF 130
+#endif
 #define LV_USE_FLOAT 1
 
 #define LV_USE_LOG 1
@@ -50,7 +55,17 @@ void* bluesquid_lvgl_pool_alloc(size_t size);
 #define LV_FONT_MONTSERRAT_22 1
 #define LV_FONT_MONTSERRAT_24 1
 #define LV_FONT_MONTSERRAT_28 1
+#if BLUESQUID_TOUCHSCREEN_10IN
+// 7-inch sizes x 8/5 (TouchScale.h); 20, 22 and 28 are enabled above.
+#define LV_FONT_MONTSERRAT_26 1
+#define LV_FONT_MONTSERRAT_32 1
+#define LV_FONT_MONTSERRAT_36 1
+#define LV_FONT_MONTSERRAT_38 1
+#define LV_FONT_MONTSERRAT_44 1
+#define LV_FONT_DEFAULT &lv_font_montserrat_22
+#else
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
+#endif
 
 #define LV_USE_BUTTON 1
 #define LV_USE_CANVAS 1

@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include "WebRemotePage.h"
+#include <atomic>
 
 namespace TouchHotspot {
 namespace {
@@ -22,20 +23,35 @@ OtaCredentials::Value currentCredentials;
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 String savedSsid, savedPassword;
 bool active = false;
+String address = "Unavailable";
+// Counted from Wi-Fi events rather than polled every loop. On the 10.1-inch
+// screen each query is a request to the Wi-Fi co-processor, and ESP-Hosted
+// crashes when one of those requests times out.
+std::atomic<int> stations{0};
+void countStations(arduino_event_id_t event) {
+  if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+    ++stations;
+  } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+    int count = stations.load();
+    while (count > 0 && !stations.compare_exchange_weak(count, count - 1)) {}
+  }
+}
 void publish() {
   Status next{};
   strlcpy(next.ssid, savedSsid.c_str(), sizeof(next.ssid));
-  strlcpy(next.ip, active ? WiFi.softAPIP().toString().c_str() : "Unavailable", sizeof(next.ip));
+  strlcpy(next.ip, address.c_str(), sizeof(next.ip));
   next.active = active;
-  next.clients = active ? WiFi.softAPgetStationNum() : 0;
+  next.clients = active ? stations.load() : 0;
   OtaCredentials::Value login;
   strlcpy(login.username, savedSsid.c_str(), sizeof(login.username));
   strlcpy(login.password, savedPassword.c_str(), sizeof(login.password));
   portENTER_CRITICAL(&mux); current = next; currentCredentials = login; portEXIT_CRITICAL(&mux);
 }
 void start() {
+  stations = 0;
   WiFi.mode(WIFI_AP);
   active = WiFi.softAP(savedSsid.c_str(), savedPassword.c_str());
+  address = active ? WiFi.softAPIP().toString() : String("Unavailable");
   Serial.printf("System hotspot: %s\n", active ? "started" : "failed");
   publish();
 }
@@ -49,6 +65,7 @@ bool begin() {
   savedSsid = preferences.getString("ssid", WifiDefaults::hotspotSsid);
   savedPassword = preferences.getString("password", WifiDefaults::hotspotPassword);
   WiFi.persistent(false);
+  WiFi.onEvent(countStations);
   start();
   char secret[33];
   snprintf(secret,sizeof(secret),"%08lx%08lx%08lx%08lx",

@@ -5,6 +5,9 @@
 // Connections, scanning,
 // and advertising share that budget. Apply the S3 setting at initialization
 // without modifying the installed framework or dependency sources.
+static_assert(CONFIG_BT_NIMBLE_MAX_CONNECTIONS + 1 >= BT_CTRL_BLE_MAX_ACT_LIMIT,
+              "NimBLE's per-connection tables must cover every radio connection handle");
+
 extern "C" esp_err_t __real_esp_bt_controller_init(esp_bt_controller_config_t*);
 extern "C" esp_err_t __wrap_esp_bt_controller_init(esp_bt_controller_config_t* config) {
   if (!config) return __real_esp_bt_controller_init(config);

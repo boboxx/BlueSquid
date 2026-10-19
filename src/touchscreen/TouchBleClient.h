@@ -14,6 +14,8 @@
 #include "OtaCredentials.h"
 #include "OtaLink.h"
 #include "TouchBleStack.h"
+#include "TouchDisplaySync.h"
+#include "PowerHistory.h"
 
 class TouchBleAdvertisedCallbacks;
 class TouchBleClientCallbacks;
@@ -40,6 +42,20 @@ class TouchBleClient {
   bool configureCerboWifi(const String& ssid, const String& password,
                           uint8_t vebusUnitId);
   String sp630ePayload() const;
+  // Display settings shared through the Controller (TouchDisplaySync).
+  bool requestDisplaySettings();
+  bool sendDisplaySetting(const String& message);
+  bool nextDisplayMessage(char (&message)[TouchDisplaySync::kMessageSize]);
+  // Power history kept by the Controller (PowerHistory::Link).
+  struct HistoryMessage {
+    uint8_t opcode = 0;
+    uint8_t id = 0;
+    uint16_t length = 0;  // payload bytes after the opcode and id
+    uint8_t payload[PowerHistory::Link::kChartPayloadMaximum]{};
+  };
+  bool historyAvailable() const { return connected() && historyCharacteristic_ != nullptr; }
+  bool sendHistory(const uint8_t* data, size_t length);
+  bool nextHistoryMessage(HistoryMessage& message);
   // Sends a command whose own acknowledgement the UI waits for, such as
   // OpenPairing or FactoryReset. One tracked request at a time.
   bool requestAction(BlueSquidControl::Command command, uint16_t value);
@@ -69,7 +85,7 @@ class TouchBleClient {
   friend class TouchBleAdvertisedCallbacks;
   friend class TouchBleClientCallbacks;
 
-  void foundRear(const TouchBleAddress& address);
+  void foundRear(const TouchBleAddress& address, bool pairingOpen);
   bool connectToRear();
   static void connectionTaskEntry(void* context);
   void disconnected();
@@ -78,6 +94,7 @@ class TouchBleClient {
   void processAlerts(const uint8_t* data, size_t length);
   void startScan();
   void setConnectionStage(const char* stage);
+  void securityFailed(const TouchBleAddress& address);
   bool queueConfiguration(const String& command, bool config);
   bool sendValueCommand(BlueSquidControl::Command command, uint8_t target,
                         uint16_t value);
@@ -92,12 +109,15 @@ class TouchBleClient {
                                 size_t length, bool);
   static void discoveryNotification(TouchBleCharacteristic*, uint8_t* data,
                                     size_t length, bool);
+  static void historyNotification(TouchBleCharacteristic*, uint8_t* data,
+                                  size_t length, bool);
 
   TouchRemoteStatus status_{};
   TouchBleAddress rearAddress_;
   TouchBleAddress lastConnectedAddress_;
   std::atomic_bool lastConnectedAddressValid_{false};
   std::atomic_bool rearAddressValid_{false};
+  bool rearPairingOpen_ = false;
   portMUX_TYPE scanMutex_ = portMUX_INITIALIZER_UNLOCKED;
   struct ConfigurationRequest {
     bool config;
@@ -110,9 +130,20 @@ class TouchBleClient {
   TouchBleCharacteristic* ackCharacteristic_ = nullptr;
   TouchBleCharacteristic* configCharacteristic_ = nullptr;
   TouchBleCharacteristic* discoveryCharacteristic_ = nullptr;
+  TouchBleCharacteristic* historyCharacteristic_ = nullptr;
+  struct HistoryWrite {
+    uint8_t length = 0;
+    uint8_t data[PowerHistory::Link::kMaximumMessage]{};
+  };
+  QueueHandle_t historyWrites_ = nullptr;
+  QueueHandle_t historyMessages_ = nullptr;
+  // Chart replies arrive in chunks; only the BLE host task writes this.
+  HistoryMessage historyAssembly_;
   // Written by the NimBLE task, read by the UI: copied under a lock rather
   // than as a heap String, so a notification cannot reallocate it mid-read.
   char sp630ePayload_[256]{};
+  // Several display messages arrive back to back; queue them all.
+  QueueHandle_t displayMessages_ = nullptr;
   std::atomic<uint32_t> sp630ePayloadRevision_{0};
   mutable portMUX_TYPE payloadMux_ = portMUX_INITIALIZER_UNLOCKED;
   uint16_t commandSequence_ = 1;

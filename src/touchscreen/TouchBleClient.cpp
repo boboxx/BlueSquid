@@ -5,6 +5,8 @@
 #include <BLEDevice.h>
 #include <BLESecurity.h>
 #include <BLEUtils.h>
+#include "TouchBleCrypto.h"
+#include "host/ble_hs.h"
 using TouchBleDevice = BLEDevice;
 using TouchBleUtils = BLEUtils;
 using TouchBleUuid = BLEUUID;
@@ -17,6 +19,7 @@ using TouchBleClientCallbacksBase = BLEClientCallbacks;
 #include <NimBLEDevice.h>
 #include "BleBondMigration.h"
 #include <NimBLEUtils.h>
+#include "nimble/nimble/host/include/host/ble_hs.h"
 using TouchBleDevice = NimBLEDevice;
 using TouchBleUtils = NimBLEUtils;
 using TouchBleUuid = NimBLEUUID;
@@ -42,6 +45,18 @@ bool writeBytes(TouchBleCharacteristic* characteristic, const uint8_t* data,
                 size_t length, bool response) {
   return characteristic->writeValue(const_cast<uint8_t*>(data), length,
                                     response);
+}
+
+// Deletes the stored pairing for one device; true if one was removed.
+bool forgetBond(const TouchBleAddress& address) {
+  constexpr int kMaximumPeers = 8;
+  ble_addr_t peers[kMaximumPeers]{};
+  int count = 0;
+  if (ble_store_util_bonded_peers(peers, &count, kMaximumPeers) != 0) return false;
+  for (int index = 0; index < count; ++index)
+    if (TouchBleAddress(peers[index]) == address)
+      return ble_store_util_delete_peer(&peers[index]) == 0;
+  return false;
 }
 
 // Drop a link that completed pairing without encryption.
@@ -87,7 +102,9 @@ class TouchBleAdvertisedCallbacks final
     const bool nameMatch = device.haveName() &&
         device.getName() == AppConfig::kBleDeviceName;
     if (serviceMatch || nameMatch) {
-      owner_.foundRear(device.getAddress());
+      const auto data = device.getManufacturerData();
+      owner_.foundRear(device.getAddress(), BlueSquidBle::advertisedPairingOpen(
+          reinterpret_cast<const uint8_t*>(data.c_str()), data.length()));
     }
   }
 
@@ -140,6 +157,7 @@ bool TouchBleClient::begin() {
     Serial.println("BLE init failed: ESP32-C6 radio unavailable");
     return false;
   }
+  if (!touchBleCryptoSelfTest()) return false;
 #else
   if (!prepareBleBondStorage()) {
     Serial.println("BLE pairing storage migration failed; BLE remains stopped");
@@ -176,8 +194,15 @@ bool TouchBleClient::begin() {
   scan->setActiveScan(true);
   scan->setInterval(45);
   scan->setWindow(30);
-  configurationQueue_ = xQueueCreate(4, sizeof(ConfigurationRequest));
-  if (!configurationQueue_) return false;
+  // Room for a full display-settings upload: every label plus the layout.
+  configurationQueue_ = xQueueCreate(TouchDisplaySync::kLabelCount + 3,
+                                     sizeof(ConfigurationRequest));
+  displayMessages_ = xQueueCreate(TouchDisplaySync::kLabelCount + 3,
+                                  TouchDisplaySync::kMessageSize);
+  historyWrites_ = xQueueCreate(4, sizeof(HistoryWrite));
+  historyMessages_ = xQueueCreate(2, sizeof(HistoryMessage));
+  if (!configurationQueue_ || !displayMessages_ || !historyWrites_ || !historyMessages_)
+    return false;
   connectionWake_ = xSemaphoreCreateBinary();
   if (!connectionWake_) {
     vQueueDelete(configurationQueue_);
@@ -219,12 +244,13 @@ void TouchBleClient::startScan() {
   }
 }
 
-void TouchBleClient::foundRear(const TouchBleAddress& address) {
+void TouchBleClient::foundRear(const TouchBleAddress& address, bool pairingOpen) {
   portENTER_CRITICAL(&scanMutex_);
   if (connectRequested_ || connectionInProgress_.load()) {
     portEXIT_CRITICAL(&scanMutex_);
     return;
   }
+  rearPairingOpen_ = pairingOpen;
   rearAddress_ = address;
   rearAddressValid_ = true;
   connectRequested_ = true;
@@ -292,6 +318,7 @@ void TouchBleClient::updateConnection() {
     connectRequested_ = false;
     rearAddress_ = lastConnectedAddress_;
     rearAddressValid_ = true;
+    rearPairingOpen_ = false;  // Unknown without a fresh advertisement.
     portEXIT_CRITICAL(&scanMutex_);
     TouchBleScan* scan = TouchBleDevice::getScan();
     if (!scan->stop()) {
@@ -382,6 +409,11 @@ void TouchBleClient::maintainConnection() {
       Serial.printf("BLE configuration write: %s\n", sent ? "acknowledged" : "failed");
     }
   }
+  HistoryWrite history;
+  if (historyWrites_ && xQueueReceive(historyWrites_, &history, 0) == pdTRUE &&
+      historyCharacteristic_ != nullptr &&
+      !writeBytes(historyCharacteristic_, history.data, history.length, true))
+    Serial.println("BLE power history request failed");
 }
 
 void TouchBleClient::connectionTaskEntry(void* context) {
@@ -412,6 +444,18 @@ void TouchBleClient::connectionTaskEntry(void* context) {
     owner->connectionStage_.store(success ? "online" : "retry");
     owner->connectionInProgress_.store(false);
   }
+}
+
+// Keys the Controller no longer holds fail at encryption (HCI MIC failure),
+// and the touchscreen would retry them forever. Discard them only while the
+// Controller advertises an open pairing window, so a transient failure never
+// costs a working touchscreen its pairing.
+void TouchBleClient::securityFailed(const TouchBleAddress& address) {
+  portENTER_CRITICAL(&scanMutex_);
+  const bool pairingOpen = rearPairingOpen_;
+  portEXIT_CRITICAL(&scanMutex_);
+  if (pairingOpen && forgetBond(address))
+    Serial.println("BLE stored pairing rejected while pairing is open; pairing again");
 }
 
 void TouchBleClient::setConnectionStage(const char* stage) {
@@ -450,6 +494,7 @@ bool TouchBleClient::connectToRear() {
   Serial.println("BLE controller stage: securing");
   if (!client_->secureConnection()) {
     Serial.println("BLE controller security failed");
+    securityFailed(address);
     return false;
   }
 #else
@@ -465,6 +510,7 @@ bool TouchBleClient::connectToRear() {
   Serial.println("BLE controller stage: securing");
   if (!client_->secureConnection()) {
     Serial.printf("BLE controller security failed: %d\n", client_->getLastError());
+    securityFailed(address);
     return false;
   }
 #endif
@@ -500,6 +546,12 @@ bool TouchBleClient::connectToRear() {
     processAlerts(reinterpret_cast<const uint8_t*>(initialAlerts.c_str()),
                   initialAlerts.length());
   }
+  // Optional: Controllers before 1.0.49 keep no power history.
+  setConnectionStage("subscribing history");
+  TouchBleCharacteristic* history =
+      service->getCharacteristic(PowerHistory::Link::kUuid);
+  if (history != nullptr && !history->subscribe(true, historyNotification))
+    history = nullptr;
   setConnectionStage("discovering configuration service");
   TouchBleService* legacyService =
       client_->getService(AppConfig::Ble::kServiceUuid);
@@ -535,6 +587,7 @@ bool TouchBleClient::connectToRear() {
   ackCharacteristic_ = ack;
   configCharacteristic_ = config;
   discoveryCharacteristic_ = discovery;
+  historyCharacteristic_ = history;
   otaCredentialsCharacteristic_.store(otaCredentials);
   otaLinkCharacteristic_.store(otaLink);
   otaConnectionRevision_.fetch_add(1);
@@ -562,7 +615,9 @@ void TouchBleClient::disconnected() {
   connectRequested_ = false;
   status_.lastHeartbeatMs = 0;
   status_.alerts.valid = false;
+  historyCharacteristic_ = nullptr;
   if (configurationQueue_) xQueueReset(configurationQueue_);
+  if (historyWrites_) xQueueReset(historyWrites_);
   for (uint8_t zone = 0; zone < 4; ++zone) {
     rgbwPending_[zone] = false;
     rgbwAwaitingAck_[zone] = false;
@@ -706,6 +761,61 @@ bool TouchBleClient::assignSp630e(uint8_t target, uint8_t channel,
   return queueConfiguration(command, true);
 }
 
+bool TouchBleClient::requestDisplaySettings() {
+  return connected() && discoveryCharacteristic_ &&
+         queueConfiguration(TouchDisplaySync::kRequest, false);
+}
+bool TouchBleClient::sendDisplaySetting(const String& message) {
+  return queueConfiguration(message, true);
+}
+bool TouchBleClient::nextDisplayMessage(char (&message)[TouchDisplaySync::kMessageSize]) {
+  return displayMessages_ && xQueueReceive(displayMessages_, message, 0) == pdTRUE;
+}
+
+bool TouchBleClient::sendHistory(const uint8_t* data, size_t length) {
+  HistoryWrite write;
+  if (!historyAvailable() || length == 0 || length > sizeof(write.data)) return false;
+  write.length = static_cast<uint8_t>(length);
+  memcpy(write.data, data, length);
+  return xQueueSend(historyWrites_, &write, 0) == pdTRUE;
+}
+
+bool TouchBleClient::nextHistoryMessage(HistoryMessage& message) {
+  return historyMessages_ && xQueueReceive(historyMessages_, &message, 0) == pdTRUE;
+}
+
+void TouchBleClient::historyNotification(TouchBleCharacteristic*, uint8_t* data,
+                                         size_t length, bool) {
+  namespace Link = PowerHistory::Link;
+  if (activeClient == nullptr || data == nullptr || length < 2) return;
+  HistoryMessage& message = activeClient->historyAssembly_;
+  if (data[0] == Link::kChartResponse) {
+    if (length < Link::kChartHeader) return;
+    const uint8_t chunk = data[2], chunks = data[3];
+    if (chunk == 0) {
+      message.opcode = data[0];
+      message.id = data[1];
+      message.length = 0;
+    } else if (message.opcode != data[0] || message.id != data[1]) {
+      return;  // a chunk of a reply whose start was missed
+    }
+    const size_t size = length - Link::kChartHeader;
+    if (message.length + size > sizeof(message.payload)) return;
+    memcpy(message.payload + message.length, data + Link::kChartHeader, size);
+    message.length += size;
+    if (chunk + 1 != chunks) return;
+  } else {
+    if (length - 2 > sizeof(message.payload)) return;
+    message.opcode = data[0];
+    message.id = data[1];
+    message.length = length - 2;
+    memcpy(message.payload, data + 2, length - 2);
+  }
+  if (xQueueSend(activeClient->historyMessages_, &message, 0) != pdTRUE)
+    Serial.println("BLE power history reply dropped");
+  message.opcode = 0;
+}
+
 bool TouchBleClient::requestRvcFanConfiguration() {
   return connected() && discoveryCharacteristic_ && queueConfiguration("rvc.config", false);
 }
@@ -730,6 +840,14 @@ void TouchBleClient::discoveryNotification(TouchBleCharacteristic*,
                                             uint8_t* data, size_t length,
                                             bool) {
   if (activeClient == nullptr || data == nullptr) return;
+  if (length >= 3 && memcmp(data, "ui.", 3) == 0) {
+    char message[TouchDisplaySync::kMessageSize]{};
+    if (length >= sizeof(message)) return;
+    memcpy(message, data, length);
+    if (xQueueSend(activeClient->displayMessages_, message, 0) != pdTRUE)
+      Serial.println("BLE display settings message dropped");
+    return;
+  }
   const size_t count = length < sizeof(activeClient->sp630ePayload_)
       ? length : sizeof(activeClient->sp630ePayload_) - 1;
   portENTER_CRITICAL(&activeClient->payloadMux_);

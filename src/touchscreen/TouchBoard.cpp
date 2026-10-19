@@ -52,6 +52,19 @@ uint8_t probeTouchAddress() {
 
 esp_panel::board::Board* createTouchBoard() {
   esp_panel::board::BoardConfig config = ESP_PANEL_BOARD_DEFAULT_CONFIG;
+  // DisplayPanel 1.0.4 selects the legacy 20 MHz PHY reference clock.
+  // P4 rev.3 requires the new XTAL default; the legacy source aborts in IDF.
+  if (config.lcd.has_value()) {
+    auto* bus = std::get_if<esp_panel::drivers::BusDSI::Config>(
+        &config.lcd->bus_config);
+    if (bus != nullptr) {
+      bus->convertPartialToFull();
+      auto& host = std::get<esp_panel::drivers::BusDSI::HostFullConfig>(bus->host);
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+      host.phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT;
+#endif
+    }
+  }
   const uint8_t address = probeTouchAddress();
   if (address == 0) {
     Serial.println("Touch controller not found at 0x5D or 0x14; using 0x5D");

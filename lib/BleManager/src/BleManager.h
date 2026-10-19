@@ -10,6 +10,7 @@
 #include "CerboWifiManager.h"
 #include "EventManager.h"
 #include "OutputController.h"
+#include "PowerHistoryStore.h"
 #include "SensorManager.h"
 #include "SettingsManager.h"
 #include "SystemTypes.h"
@@ -36,6 +37,8 @@ class BleManager {
   void publishStatus(const SystemStatus& status);
   bool isClientConnected() const;
   void openPairingWindow();
+  // Power history answered over the touchscreen history characteristic.
+  void setPowerHistory(PowerHistory::Store* store) { powerHistory_ = store; }
   uint8_t connectedClientCount() const;
 
  private:
@@ -67,6 +70,7 @@ class BleManager {
   friend class BleTouchSnapshotCallbacks;
   friend class BleOtaCredentialsCallbacks;
   friend class BleOtaLinkCallbacks;
+  friend class BleHistoryCallbacks;
 
   struct ConfigWrite {
     uint16_t connectionHandle = 0xFFFF;
@@ -107,6 +111,12 @@ class BleManager {
   void setClientPrimary(uint16_t connectionHandle, bool primary);
   void disconnectIdleClients();
   void maintainAdvertising();
+  void updatePairingAdvertisement();
+  void queueHistoryRequest(uint16_t connectionHandle, const std::string& value);
+  void processHistoryRequest();
+  void setTouchDisplay(const std::string& value);
+  void sendTouchDisplay();
+  void notifyDiscovery(const String& message);
   void setConnectedClientCount(uint8_t count);
   static void encodeStatus(const SystemStatus& status, uint8_t* packet);
 
@@ -139,6 +149,21 @@ class BleManager {
   uint32_t sp630eDiscoveryStartedMs_ = 0;
   uint32_t lastAdvertisingCheckMs_ = 0;
   uint32_t lastAdvertisingDiagnosticMs_ = 0;
+  // -1 until the advertisement first carries the pairing state.
+  int8_t advertisedPairingOpen_ = -1;
+  // Stored display messages still to send after a request: one bit per
+  // label, then the layout. Paced so notifications cannot exhaust buffers.
+  struct HistoryRequest {
+    uint16_t connectionHandle = 0xFFFF;
+    uint8_t length = 0;
+    uint8_t data[PowerHistory::Link::kMaximumMessage]{};
+  };
+  QueueHandle_t historyRequests_ = nullptr;
+  NimBLECharacteristic* historyCharacteristic_ = nullptr;
+  PowerHistory::Store* powerHistory_ = nullptr;
+  uint16_t touchDisplayPending_ = 0;
+  bool touchDisplaySent_ = false;
+  uint32_t lastTouchDisplaySendMs_ = 0;
   uint32_t touchStateRevision_ = 0;
   struct PendingTouchCommand {
     uint16_t connectionHandle = 0xFFFF;

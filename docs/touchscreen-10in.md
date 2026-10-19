@@ -41,8 +41,10 @@ board support, which targets Arduino-ESP32 3.3.11.
 
 ## First power-up checklist
 
-The firmware compiles but has not yet run on this board. On the first USB
-upload, watch the serial log at 115200 baud:
+Firmware 1.0.68 has been boot-tested on an ESP32-P4 revision 3.2 board:
+display, backlight, touch-controller detection and LVGL/UI initialization
+completed. Picture orientation and touch alignment still require checking
+on the physical screen. On USB upload, watch the serial log at 115200 baud:
 
 1. Check the silicon revision with `esptool --chip esp32p4 chip-id`. v1.x
    silicon needs `board = esp32-p4` instead of `esp32-p4_r3`.
@@ -55,6 +57,48 @@ upload, watch the serial log at 115200 baud:
    ESP32-C6 radio unavailable` appears, the C6's factory hosted firmware may
    not match Arduino 3.3.11's ESP-Hosted version.
 5. Settings export and import to the SD card.
+
+### Adding the screen
+
+On the connected 7-inch screen, open **System Configuration**, scroll down,
+and tap **Pair another touchscreen**. Wait for **Pairing open for 2 minutes**,
+then start the 10.1-inch screen. If the existing screen reports **Controller
+offline**, restore its connection first; the pairing request has not reached
+the Controller. The Controller log confirms `Bluetooth pairing open for 120 s`
+and, after success, `Accepted new Bluetooth device`.
+
+From touchscreen 1.0.72 and Controller 1.0.48, device names, icons, icon
+colours, visibility and order are stored on the Controller and shared by every
+screen. A new screen takes them from the Controller when it connects. If the
+Controller has none yet, the first screen with customized settings provides
+them; a screen still at its defaults never overwrites them.
+
+A screen that was paired before, but whose stored keys no longer match the
+Controller's, fails at encryption: the Controller logs `pairing failed with
+<address>` and a disconnect reason of `0x23d` (MIC failure). From touchscreen
+1.0.70 and Controller 1.0.46, the Controller advertises an open pairing
+window, and the screen then discards its stale pairing and pairs again (`BLE
+stored pairing rejected while pairing is open; pairing again`). While the
+window is closed, a screen always keeps its pairing.
+
+### P4 Secure Connections compatibility
+
+Firmware 1.0.69 routes the P4's NimBLE DHKey calculation through mbedTLS.
+The pinned framework's TinyCrypt backend exhibited DHKey-check failures
+(`1291` / `0x050b`), matching
+[Espressif's P4 report](https://github.com/espressif/esp-hosted-mcu/issues/241)
+and [upstream correction](https://github.com/espressif/esp-idf/commit/9fd7cb7e606).
+The linker wrapper applies only to `touchscreen_10in`; Secure Connections,
+bonding, public-key validation and the Controller pairing window stay enabled.
+Before scanning, a known-answer P-256 test and invalid-key rejection checks
+must pass. Remove the wrapper after validating a framework with the upstream
+fix. No saved bonds need to be erased for this correction.
+
+The custom board constructor uses Display Panel's runtime factories, so
+JD9365 and GT911 must be enabled in `esp_panel_drivers_conf.h`; compiling
+unused drivers alone does not register them. On P4 revision 3, `TouchBoard.cpp`
+also selects the XTAL DSI PHY reference clock. Display Panel 1.0.4's legacy
+20 MHz default causes an abort with the current framework on this silicon.
 
 ## Build environment notes
 

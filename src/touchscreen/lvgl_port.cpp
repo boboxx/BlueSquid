@@ -48,23 +48,23 @@ std::atomic_bool suppressWakeGesture{false};
 std::atomic_uint32_t wakeGestureStartedMs{0};
 
 #if BLUESQUID_TOUCHSCREEN_10IN
-// The 10.1-inch panel is 800x1280 portrait. The UI keeps the 7-inch 800x480
-// layout; the PPA scales it by 25/16 (exact in the PPA's 1/16 steps) and
-// rotates it into landscape, leaving a thin black border.
+// The 10.1-inch panel is 800x1280 portrait. LVGL renders the landscape UI at
+// the native 1280x800 (layout units are scaled in TouchScale.h) and the PPA
+// only rotates it onto the panel.
 #ifndef BLUESQUID_P4_DISPLAY_ROTATION
 #define BLUESQUID_P4_DISPLAY_ROTATION 90
 #endif
 static_assert(BLUESQUID_P4_DISPLAY_ROTATION == 90 ||
                   BLUESQUID_P4_DISPLAY_ROTATION == 270,
               "BLUESQUID_P4_DISPLAY_ROTATION must be 90 or 270");
-constexpr int32_t kLogicalWidth = 800;
-constexpr int32_t kLogicalHeight = 480;
 constexpr int32_t kPanelWidth = 800;
 constexpr int32_t kPanelHeight = 1280;
 constexpr int32_t kLandscapeWidth = kPanelHeight;
 constexpr int32_t kLandscapeHeight = kPanelWidth;
-constexpr int32_t kScaleNumerator = 25;
-constexpr int32_t kScaleDenominator = 16;
+constexpr int32_t kLogicalWidth = kLandscapeWidth;
+constexpr int32_t kLogicalHeight = kLandscapeHeight;
+constexpr int32_t kScaleNumerator = 1;
+constexpr int32_t kScaleDenominator = 1;
 constexpr int32_t kOffsetX =
     (kLandscapeWidth - kLogicalWidth * kScaleNumerator / kScaleDenominator) / 2;
 constexpr int32_t kOffsetY =
@@ -82,14 +82,18 @@ int32_t scaled(int32_t value) {
   return value * kScaleNumerator / kScaleDenominator;
 }
 
-// Fractional scaling would leave seams between separately flushed areas.
-// Align every redraw to the scale denominator so each maps to whole pixels.
+// The PPA corrupts blocks with arbitrary edges; flush only blocks aligned to
+// 16 pixels, as it received while it also scaled the UI by 25/16.
+constexpr int32_t kFlushAlignment = 16;
+static_assert(kLogicalWidth % kFlushAlignment == 0 &&
+                  kLogicalHeight % kFlushAlignment == 0,
+              "Aligned areas must stay inside the display");
 void alignInvalidArea(lv_event_t* event) {
   auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
-  area->x1 &= ~(kScaleDenominator - 1);
-  area->y1 &= ~(kScaleDenominator - 1);
-  area->x2 |= kScaleDenominator - 1;
-  area->y2 |= kScaleDenominator - 1;
+  area->x1 &= ~(kFlushAlignment - 1);
+  area->y1 &= ~(kFlushAlignment - 1);
+  area->x2 |= kFlushAlignment - 1;
+  area->y2 |= kFlushAlignment - 1;
 }
 
 void flushScaled(lv_display_t* displayDriver, const lv_area_t* area,
@@ -135,7 +139,7 @@ void flushScaled(lv_display_t* displayDriver, const lv_area_t* area,
   lv_display_flush_ready(displayDriver);
 }
 
-// Map a portrait panel touch to the logical 800x480 layout.
+// Map a portrait panel touch to the landscape display.
 bool mapTouch(int32_t panelX, int32_t panelY, int32_t& x, int32_t& y) {
 #if BLUESQUID_P4_DISPLAY_ROTATION == 90
   const int32_t landscapeX = kLandscapeWidth - 1 - panelY;
@@ -338,10 +342,9 @@ bool lvgl_port_init(LCD* lcd, Touch* touch) {
     return false;
   }
   drawBuffers[0] = renderFrame;
-  Serial.printf("LVGL init: %ldx%ld UI scaled %ld/%ld onto %ldx%ld panel, rotation %d\n",
-                long(kLogicalWidth), long(kLogicalHeight), long(kScaleNumerator),
-                long(kScaleDenominator), long(kPanelWidth), long(kPanelHeight),
-                BLUESQUID_P4_DISPLAY_ROTATION);
+  Serial.printf("LVGL init: native %ldx%ld rotated onto %ldx%ld panel, rotation %d\n",
+                long(kLogicalWidth), long(kLogicalHeight), long(kPanelWidth),
+                long(kPanelHeight), BLUESQUID_P4_DISPLAY_ROTATION);
   display = lv_display_create(kLogicalWidth, kLogicalHeight);
   if (display == nullptr) {
     Serial.println("LVGL init: display creation failed");

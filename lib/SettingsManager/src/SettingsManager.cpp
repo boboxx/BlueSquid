@@ -206,3 +206,11 @@ bool SettingsManager::saveRvcFanConfiguration(const RvcFan::Config& config) {
   if (saved) ++rvcFanRevision_;
   return saved;
 }
+
+String SettingsManager::loadTouchDisplay(const char* key) {
+  return ready_ && preferences_.isKey(key) ? preferences_.getString(key, "") : String();
+}
+
+bool SettingsManager::saveTouchDisplay(const char* key, const String& message) {
+  return ready_ && preferences_.putString(key, message) == message.length();
+}

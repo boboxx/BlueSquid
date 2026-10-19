@@ -11,10 +11,27 @@
 #include "BlueSquidBleProtocol.h"
 #include "Logging.h"
 #include "Sp630eBleAdapter.h"
+#include "TouchDisplaySync.h"
 #include "VictronAlerts.h"
 
 namespace {
 constexpr char kTag[] = "BLE";
+
+// NimBLE's server callbacks omit the pairing status, which is the only clue
+// when a touchscreen cannot pair. Codes 0x4xx are local Security Manager
+// errors and 0x5xx come from the peer; the low byte is the SMP reason.
+ble_gap_event_listener securityListener;
+int logSecurityFailure(ble_gap_event* event, void*) {
+  if (event->type != BLE_GAP_EVENT_ENC_CHANGE || event->enc_change.status == 0)
+    return 0;
+  ble_gap_conn_desc description{};
+  const bool found = ble_gap_conn_find(event->enc_change.conn_handle, &description) == 0;
+  LOG_WARN(kTag, "Connection %u pairing failed with %s: status=%d (0x%03x)",
+           event->enc_change.conn_handle,
+           found ? NimBLEAddress(description.peer_id_addr).toString().c_str() : "unknown device",
+           event->enc_change.status, event->enc_change.status);
+  return 0;
+}
 
 enum class Command : uint8_t {
   Fan = 0x04,
@@ -92,8 +109,8 @@ class BleServerCallbacks final : public NimBLEServerCallbacks {
     const uint8_t count = static_cast<uint8_t>(server->getConnectedCount());
     manager_.unregisterClient(description.getConnHandle());
     manager_.setConnectedClientCount(count);
-    LOG_INFO(kTag, "Client disconnected (%u/%u)", count,
-             CONFIG_BT_NIMBLE_MAX_CONNECTIONS);
+    LOG_INFO(kTag, "Client disconnected (%u/%u), reason=%d (0x%03x)", count,
+             CONFIG_BT_NIMBLE_MAX_CONNECTIONS, reason, reason);
     if (!server->startAdvertising()) {
       LOG_WARN(kTag, "Advertising restart failed; will retry from main loop");
     }
@@ -162,6 +179,20 @@ class BleStatusCallbacks final : public NimBLECharacteristicCallbacks {
              subscriptionValue != 0 ? "enabled" : "disabled");
 
     if (subscriptionValue != 0) manager_.statusRefreshRequested_.store(true);
+  }
+
+ private:
+  BleManager& manager_;
+};
+
+class BleHistoryCallbacks final : public NimBLECharacteristicCallbacks {
+ public:
+  explicit BleHistoryCallbacks(BleManager& manager) : manager_(manager) {}
+
+  void onWrite(NimBLECharacteristic* characteristic,
+               NimBLEConnInfo& description) override {
+    manager_.queueHistoryRequest(description.getConnHandle(),
+                                 characteristic->getValue());
   }
 
  private:
@@ -305,8 +336,11 @@ BleManager::BleManager(EventManager& eventManager,
       cerboWifi_(cerboWifi) {}
 
 bool BleManager::begin() {
-  static_assert(MYNEWT_VAL(BLE_MAX_CONNECTIONS) == 6, "Controller needs six BLE links");
+  static_assert(MYNEWT_VAL(BLE_MAX_CONNECTIONS) == 9,
+                "Controller needs a BLE slot for every radio connection handle");
   static_assert(MYNEWT_VAL(BLE_STORE_MAX_BONDS) == 6, "Preserve all six BLE bond slots");
+  static_assert(MYNEWT_VAL(BLE_STORE_MAX_CCCDS) >= 8 * MYNEWT_VAL(BLE_STORE_MAX_BONDS),
+                "A full subscription store disconnects and unpairs other devices");
   static_assert(MYNEWT_VAL(BLE_HS_FLOW_CTRL_ITVL) == 20,
                 "Multi-link BLE requires prompt receive-credit returns");
   char deviceName[24] = {};
@@ -329,8 +363,10 @@ bool BleManager::begin() {
   const int bondCount = NimBLEDevice::getNumBonds();
   LOG_INFO(kTag, "Retaining %d BLE bond(s)", bondCount);
   bondGuard_.begin();
+  ble_gap_event_listener_register(&securityListener, logSecurityFailure, nullptr);
 
-  configWrites_ = xQueueCreate(4, sizeof(ConfigWrite));
+  configWrites_ = xQueueCreate(8, sizeof(ConfigWrite));
+  historyRequests_ = xQueueCreate(4, sizeof(HistoryRequest));
   if (configWrites_ == nullptr) LOG_WARN(kTag, "Configuration queue unavailable");
 
   server_ = NimBLEDevice::createServer();
@@ -404,6 +440,11 @@ bool BleManager::begin() {
   uint8_t noAlerts[VictronAlerts::kPayloadSize]{};
   VictronAlerts::encode(VictronAlerts::Snapshot(), noAlerts);
   touchAlertCharacteristic_->setValue(noAlerts, sizeof(noAlerts));
+  historyCharacteristic_ = touchService->createCharacteristic(
+      PowerHistory::Link::kUuid,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC |
+          NIMBLE_PROPERTY::NOTIFY);
+  historyCharacteristic_->setCallbacks(new BleHistoryCallbacks(*this));
   touchService->start();
 
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
@@ -413,6 +454,7 @@ bool BleManager::begin() {
   // then discovers its dedicated service after connecting.
   advertising->enableScanResponse(true);
   advertising->setName(deviceName);  // NimBLE 2.x no longer adds the GAP name.
+  updatePairingAdvertisement();
   advertising->start();
 
   LOG_INFO(kTag, "Advertising as %s", deviceName);
@@ -445,6 +487,7 @@ void BleManager::update() {
 
   // Decide trust before running anything a new connection has queued.
   verifyClients();
+  updatePairingAdvertisement();
   processConfigWrites();
   if (statusRefreshRequested_.exchange(false)) publishLatestStatus();
 
@@ -458,6 +501,8 @@ void BleManager::update() {
     processCommand(command.connectionHandle, command.opcode, command.value);
   }
   processTouchCommand();
+  processHistoryRequest();
+  sendTouchDisplay();
   disconnectIdleClients();
   maintainAdvertising();
   if (restartRequested_) {
@@ -510,6 +555,8 @@ void BleManager::handleConfigWrite(const std::string& value) {
     setRvcFanConfig(value);
   else if (value.rfind("wifi.ap=", 0) == 0)
     setCerboWifiConfig(value);
+  else if (value.rfind("ui.", 0) == 0)
+    setTouchDisplay(value);
   else
     setBatteryCapacityConfig(value);
 }
@@ -517,6 +564,11 @@ void BleManager::handleConfigWrite(const std::string& value) {
 void BleManager::handleDiscoveryWrite(const std::string& value) {
   if (value == "sp630e") {
     requestSp630eDiscovery();
+    return;
+  }
+  if (value == TouchDisplaySync::kRequest) {
+    touchDisplayPending_ = (1U << (TouchDisplaySync::kLabelCount + 1)) - 1;
+    touchDisplaySent_ = false;
     return;
   }
   if (value == "sp630e.config") latestDiscoveryPayload_ = sp630eConfig();
@@ -601,6 +653,133 @@ void BleManager::setSp630eConfig(const std::string& value) {
   if (!clearing) strlcpy(assignments[target].address, address, 18);
   if (settingsManager_.saveSp630eAssignments(assignments))
     restartRequested_ = true;
+}
+
+namespace {
+void touchDisplayKey(uint8_t entry, char (&key)[10]) {
+  if (entry < TouchDisplaySync::kLabelCount) snprintf(key, sizeof(key), "uiLabel%u", entry);
+  else strlcpy(key, "uiLayout", sizeof(key));
+}
+}  // namespace
+
+void BleManager::setTouchDisplay(const std::string& value) {
+  TouchDisplaySync::Label label;
+  TouchDisplaySync::Layout layout;
+  char key[10]{};
+  if (TouchDisplaySync::parseLabel(value.c_str(), label)) {
+    touchDisplayKey(label.index, key);
+  } else if (TouchDisplaySync::parseLayout(value.c_str(), layout)) {
+    touchDisplayKey(TouchDisplaySync::kLabelCount, key);
+  } else {
+    LOG_WARN(kTag, "Rejected malformed touchscreen display setting");
+    return;
+  }
+  const String message(value.c_str());
+  if (settingsManager_.loadTouchDisplay(key) != message &&
+      !settingsManager_.saveTouchDisplay(key, message)) {
+    LOG_WARN(kTag, "Could not save touchscreen display setting %s", key);
+    return;
+  }
+  // Every connected touchscreen applies the change, including the sender.
+  notifyDiscovery(message);
+}
+
+void BleManager::sendTouchDisplay() {
+  if (touchDisplayPending_ == 0 || millis() - lastTouchDisplaySendMs_ < 30) return;
+  lastTouchDisplaySendMs_ = millis();
+  uint8_t entry = 0;
+  while (!(touchDisplayPending_ & (1U << entry))) ++entry;
+  touchDisplayPending_ &= ~(1U << entry);
+  char key[10]{};
+  touchDisplayKey(entry, key);
+  const String message = settingsManager_.loadTouchDisplay(key);
+  if (message.length() != 0) {
+    notifyDiscovery(message);
+    touchDisplaySent_ = true;
+  }
+  if (touchDisplayPending_ == 0 && !touchDisplaySent_)
+    notifyDiscovery(TouchDisplaySync::kNone);
+}
+
+void BleManager::queueHistoryRequest(uint16_t connectionHandle,
+                                     const std::string& value) {
+  HistoryRequest request;
+  request.connectionHandle = connectionHandle;
+  if (historyRequests_ == nullptr || value.empty() || value.size() > sizeof(request.data)) {
+    LOG_WARN(kTag, "Rejected history request (%u bytes)", static_cast<unsigned>(value.size()));
+    return;
+  }
+  request.length = static_cast<uint8_t>(value.size());
+  memcpy(request.data, value.data(), value.size());
+  if (xQueueSend(historyRequests_, &request, 0) != pdTRUE)
+    LOG_WARN(kTag, "History request queue full; request discarded");
+}
+
+// One request per loop: a month chart reads up to two monthly files.
+void BleManager::processHistoryRequest() {
+  namespace Link = PowerHistory::Link;
+  HistoryRequest request;
+  if (historyRequests_ == nullptr ||
+      xQueueReceive(historyRequests_, &request, 0) != pdTRUE)
+    return;
+  if (!clientTrusted(request.connectionHandle) || powerHistory_ == nullptr ||
+      request.length < 2)
+    return;
+  const uint8_t opcode = request.data[0], id = request.data[1];
+  uint8_t reply[Link::kMaximumMessage]{};
+  if (opcode == Link::kChartRequest) {
+    static PowerHistory::Chart chart;  // too large for the loop task's stack
+    if (!Link::decodeChartRequest(request.data, request.length, chart)) {
+      LOG_WARN(kTag, "Rejected malformed history chart request");
+      return;
+    }
+    powerHistory_->chart(chart);
+    static uint8_t payload[Link::kChartPayloadMaximum];
+    const size_t size = Link::encodeChart(chart, payload);
+    const uint8_t chunks = static_cast<uint8_t>((size + Link::kChartChunk - 1) / Link::kChartChunk);
+    for (uint8_t chunk = 0; chunk < chunks; ++chunk) {
+      const size_t offset = size_t(chunk) * Link::kChartChunk;
+      const size_t length = min(Link::kChartChunk, size - offset);
+      reply[0] = Link::kChartResponse;
+      reply[1] = id;
+      reply[2] = chunk;
+      reply[3] = chunks;
+      memcpy(reply + Link::kChartHeader, payload + offset, length);
+      historyCharacteristic_->notify(reply, Link::kChartHeader + length,
+                                     request.connectionHandle);
+    }
+    return;
+  }
+  if (opcode == Link::kStatusRequest) {
+    const Link::Status status = powerHistory_->status();
+    reply[0] = Link::kStatusResponse;
+    reply[1] = id;
+    memcpy(reply + 2, &status.recordingSince, 4);
+    memcpy(reply + 6, &status.importedUntil, 4);
+    memcpy(reply + 10, &status.bytes, 4);
+    memcpy(reply + 14, &status.limit, 4);
+    historyCharacteristic_->notify(reply, 18, request.connectionHandle);
+    return;
+  }
+  if (opcode == Link::kImport &&
+      (request.length - 2) % sizeof(PowerHistory::Record) == 0) {
+    PowerHistory::Record records[Link::kImportRecords];
+    const size_t count = (request.length - 2) / sizeof(PowerHistory::Record);
+    memcpy(records, request.data + 2, count * sizeof(PowerHistory::Record));
+    reply[0] = Link::kImportResponse;
+    reply[1] = id;
+    reply[2] = powerHistory_->import(records, count);
+    const uint32_t importedUntil = powerHistory_->status().importedUntil;
+    memcpy(reply + 3, &importedUntil, 4);
+    historyCharacteristic_->notify(reply, 7, request.connectionHandle);
+    return;
+  }
+  LOG_WARN(kTag, "Rejected unknown history request 0x%02x", opcode);
+}
+
+void BleManager::notifyDiscovery(const String& message) {
+  discoveryCharacteristic_->setValue(message.c_str());
+  discoveryCharacteristic_->notify();
 }
 
 String BleManager::rvcFanConfig() const {
@@ -1181,6 +1360,36 @@ bool BleManager::clientTrusted(uint16_t connectionHandle) const {
 
 void BleManager::openPairingWindow() {
   bondGuard_.openWindow(millis());
+  updatePairingAdvertisement();
+}
+
+void BleManager::updatePairingAdvertisement() {
+  const bool open = bondGuard_.windowOpen(millis());
+  if (advertisedPairingOpen_ == static_cast<int8_t>(open)) return;
+  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+  uint8_t data[BlueSquidBle::kAdvertisementSize]{};
+  memcpy(data, BlueSquidBle::kAdvertisementPrefix,
+         sizeof(BlueSquidBle::kAdvertisementPrefix));
+  data[sizeof(BlueSquidBle::kAdvertisementPrefix)] =
+      open ? BlueSquidBle::kAdvertisementPairingOpen : 0;
+  bool applied;
+  if (advertisedPairingOpen_ < 0) {
+    // Before the first start(), which applies this with the scan response.
+    applied = advertising->setManufacturerData(data, sizeof(data));
+  } else {
+    // NimBLE appends manufacturer data, so replace the field in a copy and
+    // apply it to the running advertisement.
+    NimBLEAdvertisementData updated = advertising->getAdvertisementData();
+    updated.removeData(BLE_HS_ADV_TYPE_MFG_DATA);
+    applied = updated.setManufacturerData(data, sizeof(data)) &&
+              advertising->setAdvertisementData(updated);
+  }
+  if (!applied) {
+    LOG_WARN(kTag, "Pairing state could not be advertised");
+    return;
+  }
+  advertisedPairingOpen_ = open;
+  LOG_INFO(kTag, "Advertising pairing %s", open ? "open" : "closed");
 }
 
 void BleManager::setClientPrimary(uint16_t connectionHandle, bool primary) {

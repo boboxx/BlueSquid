@@ -25,6 +25,20 @@ constexpr uint32_t kReconnectDelayMs = 1000;
 constexpr uint32_t kScanDurationSeconds = 2;
 constexpr uint32_t kInteractiveCoalesceMs = 40;
 
+// Manufacturer data in the Controller's advertisement: company ID 0xFFFF (no
+// assigned company), "BS", then a flags byte. A touchscreen whose stored
+// pairing no longer works may discard it and pair again only while the
+// Controller reports an open pairing window.
+constexpr uint8_t kAdvertisementPrefix[] = {0xFF, 0xFF, 'B', 'S'};
+constexpr size_t kAdvertisementSize = sizeof(kAdvertisementPrefix) + 1;
+constexpr uint8_t kAdvertisementPairingOpen = 0x01;
+
+inline bool advertisedPairingOpen(const uint8_t* data, size_t length) {
+  return length >= kAdvertisementSize &&
+         memcmp(data, kAdvertisementPrefix, sizeof(kAdvertisementPrefix)) == 0 &&
+         (data[sizeof(kAdvertisementPrefix)] & kAdvertisementPairingOpen) != 0;
+}
+
 enum SnapshotOffset : size_t {
   kSnapshotVersion = 0,
   kSnapshotValidity = 1,

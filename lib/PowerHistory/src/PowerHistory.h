@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <time.h>
 
-// Power history on the touchscreen SD card. Energy is accumulated in
-// 5-minute slots and appended to one file per UTC month under kDirectory.
-// When the files exceed kStorageLimitBytes the oldest month is deleted.
-namespace TouchHistory {
+// Power history recorded by the Controller in its flash file system, with a
+// backup copy on a touchscreen SD card where one is fitted. Energy is
+// accumulated in 5-minute slots and appended to one file per UTC month under
+// kDirectory. When the files exceed kStorageLimitBytes the oldest month is
+// deleted. Touchscreens request charts from the Controller (see Link below).
+namespace PowerHistory {
 
 constexpr uint32_t kSlotSeconds = 300;
 constexpr size_t kStorageLimitBytes = 1024UL * 1024UL;
@@ -81,10 +83,57 @@ struct Chart {
 };
 
 // Lays out the period ending `offset` periods before the one containing
-// `now` (local time) and fills it from the SD card. Returns false only when
-// the history directory cannot be read.
+// `now` (local time) and fills it from `fs`. Returns false only when the
+// history directory cannot be read.
 bool load(fs::FS& fs, Range range, int offset, time_t now, Chart& chart);
 // Bars and points for a period, without reading any data.
 void layout(Range range, int offset, time_t now, Chart& chart);
+// Fills a freshly laid-out chart from `fs`. Only start, end, bars, barStart
+// and points are used, so the caller's time zone need not be known here.
+bool accumulate(fs::FS& fs, Chart& chart);
 
-}  // namespace TouchHistory
+// Binary messages on the history characteristic, little-endian. Every
+// message fits in 100 bytes, below the 115-byte snapshot that every
+// touchscreen link already carries.
+namespace Link {
+constexpr char kUuid[] = "7D8B2005-8A75-4E41-9A6A-35D0A7A18B01";
+constexpr size_t kMaximumMessage = 100;
+
+enum Opcode : uint8_t {
+  // id, bars, points:u16, start:u32, bar lengths in minutes:u16 x bars
+  kChartRequest = 0x01,
+  // id
+  kStatusRequest = 0x02,
+  // id, Record x up to kImportRecords: older records from an SD card
+  kImport = 0x03,
+  // id, chunk, chunk count, chart payload bytes
+  kChartResponse = 0x81,
+  // id, recordingSince:u32, importedUntil:u32, bytes:u32, limit:u32
+  kStatusResponse = 0x82,
+  // id, accepted:u8, importedUntil:u32
+  kImportResponse = 0x83,
+};
+
+constexpr size_t kChartHeader = 4;
+constexpr size_t kChartChunk = kMaximumMessage - kChartHeader;
+constexpr size_t kImportRecords = (kMaximumMessage - 2) / sizeof(Record);
+// records:u32, totals:f32 x 2, generated and consumed:f32 x bars, soc:u8 x points
+constexpr size_t kChartPayloadMaximum =
+    12 + Chart::kMaxBars * 8 + Chart::kMaxPoints;
+
+struct Status {
+  uint32_t recordingSince = 0;  // first slot the Controller recorded itself
+  uint32_t importedUntil = 0;   // newest record imported from an SD card
+  uint32_t bytes = 0;
+  uint32_t limit = 0;
+};
+
+size_t encodeChartRequest(uint8_t id, const Chart& chart, uint8_t* out);
+// Rebuilds the layout of a requested chart; values are left empty.
+bool decodeChartRequest(const uint8_t* in, size_t size, Chart& chart);
+size_t encodeChart(const Chart& chart, uint8_t* out);
+// Fills the values of a chart whose layout matches the request.
+bool decodeChart(const uint8_t* in, size_t size, Chart& chart);
+}  // namespace Link
+
+}  // namespace PowerHistory

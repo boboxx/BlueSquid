@@ -47,6 +47,10 @@ class SettingsManager {
   bool saveCerboVebusUnitId(uint8_t unitId);
   bool loadDeviceState(PersistentDeviceState& state);
   bool saveDeviceState(const PersistentDeviceState& state);
+  // Touchscreen display settings, stored as the TouchDisplaySync messages
+  // that carry them. Empty when no touchscreen has saved one.
+  String loadTouchDisplay(const char* key);
+  bool saveTouchDisplay(const char* key, const String& message);
 
  private:
   std::atomic<uint32_t> rvcFanRevision_{0};

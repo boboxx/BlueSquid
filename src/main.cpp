@@ -10,6 +10,7 @@
 #include "Logging.h"
 #include "LightSwitchManager.h"
 #include "OutputController.h"
+#include "PowerHistoryStore.h"
 #include "RgbwBleDriverManager.h"
 #include "Sp630eBleAdapter.h"
 #include "SensorManager.h"
@@ -35,6 +36,8 @@ BatteryManager batteryManager(eventManager, settingsManager);
 BleManager bleManager(eventManager, outputController, sensorManager,
                       batteryManager, settingsManager, cerboWifiManager);
 RvcFanManager rvcFanManager(outputController, settingsManager);
+PowerHistory::Store powerHistory;
+uint32_t lastHistorySampleMs = 0;
 
 uint32_t lastStatusPublishMs = 0;
 bool appWasConnected = false;
@@ -82,6 +85,22 @@ SystemStatus collectSystemStatus() {
   return status;
 }
 
+// Same quantities the touchscreens recorded; see docs/power-history.md.
+void recordPowerHistory() {
+  const uint32_t now = millis();
+  if (now - lastHistorySampleMs < 250) return;
+  lastHistorySampleMs = now;
+  const BatteryStatus battery = batteryManager.status();
+  const float generated = fmaxf(0.0F, battery.solarPower) +
+                          fmaxf(0.0F, battery.dcDcPower) +
+                          (battery.shoreValid ? fmaxf(0.0F, battery.shorePower) : 0.0F);
+  // Battery power is positive while charging, so the remainder of the
+  // generation (or the discharge) is what the loads and inverter used.
+  const float consumed = generated - battery.power;
+  powerHistory.sample(now, batteryManager.cerboTime(), battery.valid, generated,
+                      consumed, battery.stateOfCharge);
+}
+
 void publishPeriodicStatus() {
   const uint32_t now = millis();
   if (now - lastStatusPublishMs < AppConfig::kStatusPublishIntervalMs) {
@@ -106,7 +125,9 @@ void setup() {
   lightSwitchManager.begin();
   sensorManager.begin();
   batteryManager.begin();
+  powerHistory.begin();
   if (!FirmwareUpdate::begin()) LOG_WARN(kTag, "Firmware update service unavailable");
+  bleManager.setPowerHistory(&powerHistory);
   bleManager.begin();
   configureSp630eAssignments();
   rgbwBleDriverManager.begin();
@@ -123,6 +144,7 @@ void loop() {
   bleManager.update();
   cerboWifiManager.update();
   rvcFanManager.update();
+  recordPowerHistory();
   const bool lightSwitchChanged = lightSwitchManager.update();
   if (lightSwitchManager.consumePairingRequest()) bleManager.openPairingWindow();
   if (lightSwitchChanged || lightFeedbackChanged) {
